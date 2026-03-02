@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  yt-dlp-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: yt-dlp-media-manager
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/data
+      - ./downloads:/data/downloads
+    environment:
+      - DATABASE_URL=file:/data/database/media.db
+      - DOWNLOAD_PATH=/data/downloads
+      - TOOLS_DIR=/data/tools
+      - NODE_ENV=production
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/stats').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+# For Synology NAS, you may want to use a specific volume path:
+# volumes:
+#   yt-dlp-data:
+#     driver: local
+#     driver_opts:
+#       type: none
+#       o: bind
+#       device: /volume1/docker/yt-dlp-manager/data

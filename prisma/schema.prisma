@@ -1,0 +1,246 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Setting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model Channel {
+  id             String   @id @default(cuid())
+  platform       String   @default("youtube")
+  platformId     String   @unique
+  name           String
+  description    String?
+  avatarUrl      String?
+  avatarPath     String?
+  subscriberCount Int?
+  lastCheckedAt  DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  videos         Video[]
+  subscriptions  Subscription[]
+  
+  @@index([platform, platformId])
+}
+
+model Video {
+  id             String   @id @default(cuid())
+  platformId     String
+  channel        Channel  @relation(fields: [channelId], references: [id])
+  channelId      String
+  title          String
+  description    String?
+  duration       Int?
+  thumbnailUrl   String?
+  thumbnailPath  String?
+  filePath       String?
+  fileSize       BigInt?
+  quality        String?
+  format         String?
+  viewCount      BigInt?
+  publishedAt    DateTime?
+  downloadedAt   DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  watchHistory   WatchHistory[]
+  videoTags      VideoTag[]
+  downloadTasks  DownloadTask[]
+  favorites      Favorite[]
+  userIndividualVideos UserIndividualVideo[]
+
+  @@unique([platformId])
+  @@index([channelId])
+  @@index([downloadedAt])
+}
+
+model Favorite {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  videoId   String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, videoId])
+  @@index([userId])
+  @@index([videoId])
+}
+
+model UserIndividualVideo {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  videoId   String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, videoId])
+  @@index([userId])
+  @@index([videoId])
+}
+
+model SubscriptionCategory {
+  id             String   @id @default(cuid())
+  name           String
+  backgroundColor String  @default("#e5e7eb")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  subscriptions  Subscription[]
+
+  @@index([name])
+}
+
+model Subscription {
+  id               String   @id @default(cuid())
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId           String
+  channel          Channel  @relation(fields: [channelId], references: [id])
+  channelId        String
+  category         SubscriptionCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  categoryId      String?
+  downloadDays     Int      @default(30)
+  preferredQuality String?  @default("best")
+  outputFolder     String?
+  isActive         Boolean  @default(true)
+  checkInterval    Int      @default(360)
+  lastCheckAt      DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([userId, channelId])
+  @@index([isActive])
+  @@index([userId])
+  @@index([categoryId])
+}
+
+model DownloadTask {
+  id              String   @id @default(cuid())
+  url             String
+  video           Video?   @relation(fields: [videoId], references: [id], onDelete: SetNull)
+  videoId         String?
+  title           String?
+  status          String   @default("pending")
+  progress        Int      @default(0)
+  downloadedBytes BigInt?  // скачано байт (из прогресса yt-dlp)
+  totalBytes      BigInt?  // общий размер файла (если известен)
+  quality         String?
+  format          String?
+  filePath        String?
+  errorMsg        String?
+  priority        Int      @default(0)
+  createdAt       DateTime @default(now())
+  startedAt       DateTime?
+  completedAt     DateTime?
+
+  @@index([status])
+  @@index([createdAt])
+  @@index([videoId])
+}
+
+model WatchHistory {
+  id            String   @id @default(cuid())
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId        String
+  video         Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  videoId       String
+  position      Int      @default(0)
+  completed     Boolean  @default(false)
+  watchCount    Int      @default(1)
+  lastWatchedAt DateTime @default(now())
+
+  @@unique([userId, videoId])
+  @@index([userId])
+}
+
+model Tag {
+  id        String      @id @default(cuid())
+  name      String      @unique
+  color     String?
+  videos    VideoTag[]
+  
+  @@index([name])
+}
+
+model VideoTag {
+  video    Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  videoId  String
+  tag      Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  tagId    String
+  
+  @@id([videoId, tagId])
+}
+
+// ========== Auth (NextAuth + локальные пользователи) ==========
+
+model User {
+  id           String    @id @default(cuid())
+  username     String?   @unique
+  email        String?   @unique
+  emailVerified DateTime?
+  name         String?
+  image        String?
+  passwordHash String?
+  avatarPath   String?
+  passwordChangedAt DateTime?  // дата последней смены пароля (для admin: если не null — баннер не показываем)
+
+  isAdmin      Boolean   @default(false)
+  isAllowed    Boolean   @default(false)
+
+  accounts      Account[]
+  sessions      Session[]
+  subscriptions        Subscription[]
+  watchHistory        WatchHistory[]
+  favorites           Favorite[]
+  userIndividualVideos UserIndividualVideo[]
+
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+model Account {
+  id                 String  @id @default(cuid())
+  userId             String
+  type               String
+  provider           String
+  providerAccountId  String
+  refresh_token      String?
+  access_token       String?
+  expires_at         Int?
+  token_type         String?
+  scope              String?
+  id_token           String?
+  session_state      String?
+
+  user               User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
