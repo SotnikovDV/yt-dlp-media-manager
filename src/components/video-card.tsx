@@ -1,10 +1,26 @@
 'use client';
 
-import React from 'react';
-import { Play, Video, CheckCircle, Star, Share2, Trash2, Download } from 'lucide-react';
+import React, { useState } from 'react';
+import Link from 'next/link';
+import { Play, Video, CheckCircle, Star, Trash2, Download, ExternalLink, Share2, Eye, ListPlus, Plus } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { ShareVideoMenu } from '@/components/share-video-menu';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
+
+/** Плейлист для кнопки «Добавить в плейлист» (из API). */
+export interface PlaylistForCard {
+  id: string;
+  name: string;
+  videoIds: string[];
+}
 
 function formatDuration(seconds: number | null): string {
   if (!seconds) return '0:00';
@@ -33,6 +49,16 @@ function formatBytes(bytes: number | bigint | null): string {
   return parseFloat((b / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
+function formatViews(views: number | bigint | string | null | undefined): string {
+  if (views == null || views === '') return '';
+  const v = Number(views);
+  if (!Number.isFinite(v) || v <= 0) return '';
+  if (v < 1000) return v.toString();
+  const thousands = v / 1000;
+  const value = thousands >= 10 ? Math.round(thousands).toString() : thousands.toFixed(1);
+  return `${value.replace('.', ',')} тыс.`;
+}
+
 /** Минимальный тип видео для карточки; совместим с VideoType из page */
 export interface VideoCardVideo {
   id: string;
@@ -42,6 +68,7 @@ export interface VideoCardVideo {
   filePath: string | null;
   fileSize: bigint | null;
   publishedAt: Date | string | null;
+   viewCount?: number | bigint | string | null;
   channel: { id: string; name: string; avatarUrl: string | null } | null;
   watchHistory?:
     | { position: number; completed: boolean; watchCount: number }
@@ -59,7 +86,12 @@ export interface VideoCardProps<T extends VideoCardVideo = VideoCardVideo> {
   video: T;
   onPlay: (video: T) => void;
   onFavorite?: (video: T, isFavorite: boolean) => void;
-  onShare?: (video: T) => void;
+  /** Базовый URL приложения для меню «Поделиться» (В Telegram / Скопировать ссылку). Если задан, кнопка «Поделиться» открывает выбор варианта. */
+  shareBaseUrl?: string;
+  /** Плейлисты и колбэки для кнопки «Добавить в плейлист». Если заданы, кнопка показывается вверху карточки справа от «Поделиться». */
+  playlists?: PlaylistForCard[];
+  onAddToPlaylist?: (playlistId: string, videoId: string) => void;
+  onCreatePlaylistAndAdd?: (videoId: string, suggestedName?: string) => void;
   onDelete?: (videoId: string) => void;
   showFavoriteButton?: boolean;
 }
@@ -68,12 +100,16 @@ export function VideoCard<T extends VideoCardVideo>({
   video,
   onPlay,
   onFavorite,
-  onShare,
+  shareBaseUrl,
+  playlists,
+  onAddToPlaylist,
+  onCreatePlaylistAndAdd,
   onDelete,
   showFavoriteButton = false,
 }: VideoCardProps<T>) {
   const watchRecord = Array.isArray(video.watchHistory) ? video.watchHistory[0] : video.watchHistory;
   const isFavorite = Array.isArray(video.favorites) && video.favorites.length > 0;
+  const [playlistMenuOpen, setPlaylistMenuOpen] = useState(false);
   const thumbnailSrc =
     (video.filePath || video.thumbnailUrl) ? `/api/thumbnail/${video.id}` : null;
 
@@ -84,6 +120,92 @@ export function VideoCard<T extends VideoCardVideo>({
     >
       {/* Блок превью — 50% высоты карточки, картинка по центру по вертикали */}
       <div className="relative flex-[0_0_60%] min-h-0 flex items-center justify-center bg-muted overflow-hidden">
+        {/* Кнопки в правом верхнем углу — прозрачный фон, матовое стекло только при наведении */}
+        <div className="absolute top-2 right-2 z-10 flex items-center gap-1.5">
+          {video.platformId && (
+            <a
+              href={`https://www.youtube.com/watch?v=${video.platformId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Открыть источник"
+              onClick={(e) => e.stopPropagation()}
+              className="flex items-center justify-center w-8 h-8 rounded-md text-white transition-all duration-200 hover:bg-white/25 hover:backdrop-blur-md"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+          )}
+          {shareBaseUrl && (
+            <ShareVideoMenu
+              videoId={video.id}
+              title={video.title}
+              baseUrl={shareBaseUrl}
+            >
+              <button
+                type="button"
+                title="Поделиться"
+                onClick={(e) => e.stopPropagation()}
+                className="flex items-center justify-center w-8 h-8 rounded-md text-white transition-all duration-200 hover:bg-white/25 hover:backdrop-blur-md"
+              >
+                <Share2 className="h-3.5 w-3.5" />
+              </button>
+            </ShareVideoMenu>
+          )}
+          {playlists != null && onAddToPlaylist && onCreatePlaylistAndAdd && (
+            <DropdownMenu open={playlistMenuOpen} onOpenChange={setPlaylistMenuOpen}>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  title="Добавить в плейлист"
+                  onClick={(e) => e.stopPropagation()}
+                  className="flex items-center justify-center w-8 h-8 rounded-md text-white transition-all duration-200 hover:bg-white/25 hover:backdrop-blur-md"
+                >
+                  <ListPlus className="h-3.5 w-3.5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" onCloseAutoFocus={(e) => e.preventDefault()}>
+                {playlists.map((pl) => {
+                  const alreadyIn = pl.videoIds.includes(video.id);
+                  return (
+                    <DropdownMenuItem
+                      key={pl.id}
+                      disabled={alreadyIn}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (alreadyIn) return;
+                        setPlaylistMenuOpen(false);
+                        onAddToPlaylist(pl.id, video.id);
+                      }}
+                    >
+                      {pl.name}
+                      {alreadyIn && ' ✓'}
+                    </DropdownMenuItem>
+                  );
+                })}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const name = window.prompt('Название плейлиста', video.title.slice(0, 50));
+                    if (name != null && name.trim()) {
+                      setPlaylistMenuOpen(false);
+                      onCreatePlaylistAndAdd(video.id, name.trim());
+                    }
+                  }}
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Новый плейлист
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+          {watchRecord?.completed && (
+            <span className="flex items-center justify-center w-8 h-8">
+              <CheckCircle className="h-5 w-5 text-green-500" />
+            </span>
+          )}
+        </div>
         {thumbnailSrc ? (
           <img
             src={thumbnailSrc}
@@ -105,11 +227,6 @@ export function VideoCard<T extends VideoCardVideo>({
             {formatDuration(video.duration)}
           </span>
         )}
-        {watchRecord?.completed && (
-          <span className="absolute top-2 right-2">
-            <CheckCircle className="h-5 w-5 text-green-500" />
-          </span>
-        )}
         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center">
           <Play className="h-12 w-12 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
         </div>
@@ -118,13 +235,35 @@ export function VideoCard<T extends VideoCardVideo>({
         <div className="flex-1 min-h-0">
           <h3 className="font-medium text-sm line-clamp-2">{video.title}</h3>
           <div className="flex items-center justify-between mt-2 text-xs text-muted-foreground">
-            <span>{video.channel?.name || 'Без канала'}</span>
+            {video.channel?.id ? (
+              <Link
+                href={`/library?channelId=${encodeURIComponent(video.channel.id)}`}
+                onClick={(e) => e.stopPropagation()}
+                className="hover:underline focus:underline outline-none"
+              >
+                {video.channel.name}
+              </Link>
+            ) : (
+              <span>{video.channel?.name || 'Без канала'}</span>
+            )}
             {video.fileSize != null && <span>{formatBytes(video.fileSize)}</span>}
           </div>
-          {video.publishedAt && (
-            <p className="text-xs text-muted-foreground mt-1">
-              Опубликовано: {formatDate(video.publishedAt)}
-            </p>
+          {(video.publishedAt || video.viewCount != null) && (
+            <div className="mt-1 flex items-center text-xs text-muted-foreground">
+              {video.publishedAt && (
+                <span className="whitespace-nowrap">
+                  Опубликовано: {formatDate(video.publishedAt)}
+                </span>
+              )}
+              <span className="ml-auto flex items-center gap-1 whitespace-nowrap">
+                {video.viewCount != null && (
+                  <>
+                    <Eye className="h-3 w-3" />
+                    {formatViews(video.viewCount)}
+                  </>
+                )}
+              </span>
+            </div>
           )}
         </div>
         <div className="flex flex-wrap gap-2 mt-2 shrink-0">
@@ -172,20 +311,6 @@ export function VideoCard<T extends VideoCardVideo>({
               >
                 <Download className="h-3 w-3" />
               </a>
-            </Button>
-          )}
-          {onShare && (
-            <Button
-              size="sm"
-              variant="ghost"
-              className="shrink-0"
-              onClick={(e) => {
-                e.stopPropagation();
-                onShare(video);
-              }}
-              title="Поделиться"
-            >
-              <Share2 className="h-3 w-3" />
             </Button>
           )}
           {onDelete && (

@@ -11,19 +11,21 @@ const config: Config = {
   theme: {
   	extend: {
   		colors: {
-  			background: 'hsl(var(--background))',
-  			foreground: 'hsl(var(--foreground))',
+  			background: 'var(--background)',
+  			foreground: 'var(--foreground)',
+  			surface: 'var(--surface)',
+  			'surface-foreground': 'var(--surface-foreground)',
   			card: {
-  				DEFAULT: 'hsl(var(--card))',
-  				foreground: 'hsl(var(--card-foreground))'
+  				DEFAULT: 'var(--card)',
+  				foreground: 'var(--card-foreground)'
   			},
   			popover: {
   				DEFAULT: 'hsl(var(--popover))',
   				foreground: 'hsl(var(--popover-foreground))'
   			},
   			primary: {
-  				DEFAULT: 'hsl(var(--primary))',
-  				foreground: 'hsl(var(--primary-foreground))'
+  				DEFAULT: 'var(--primary)',
+  				foreground: 'var(--primary-foreground)'
   			},
   			secondary: {
   				DEFAULT: 'hsl(var(--secondary))',
@@ -56,6 +58,11 @@ const config: Config = {
   			lg: 'var(--radius)',
   			md: 'calc(var(--radius) - 2px)',
   			sm: 'calc(var(--radius) - 4px)'
+  		},
+  		boxShadow: {
+  			'elevation-1': 'var(--elevation-1)',
+  			'elevation-2': 'var(--elevation-2)',
+  			'elevation-3': 'var(--elevation-3)',
   		}
   	}
   },

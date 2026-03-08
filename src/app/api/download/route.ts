@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
-import { getVideoInfo, type VideoInfo } from '@/lib/ytdlp';
+import { getVideoInfo, isPermanentDownloadError, type VideoInfo } from '@/lib/ytdlp';
 import { requireDownloadDeps } from '@/lib/deps';
 import { ensureQueueWorker } from '@/lib/queue-worker';
 import { downloadAndSaveChannelAvatar } from '@/lib/avatars';
@@ -198,6 +198,22 @@ export async function POST(request: NextRequest) {
           });
         }
       }).catch(() => {});
+    }
+
+    // Не создаём задачу, если для этого URL уже была постоянная ошибка (members-only, private и т.п.)
+    const previousFailed = await db.downloadTask.findFirst({
+      where: { url, status: 'failed' },
+      select: { errorMsg: true },
+      orderBy: { completedAt: 'desc' },
+    });
+    if (previousFailed?.errorMsg && isPermanentDownloadError(previousFailed.errorMsg)) {
+      return NextResponse.json(
+        {
+          error: 'Это видео недоступно для загрузки (только для участников канала, приватное или удалено).',
+          code: 'PERMANENT_UNAVAILABLE',
+        },
+        { status: 409 }
+      );
     }
 
     // Создаём задачу на скачивание

@@ -9,24 +9,30 @@ export const runtime = 'nodejs';
 
 const CONCURRENCY = 3;
 
-function isClientAbortError(error: unknown): boolean {
-  const msg = error instanceof Error ? error.message : String(error);
-  return (
-    msg.includes('Controller is already closed') ||
-    msg.includes('aborted') ||
-    msg.includes('AbortError')
-  );
-}
-
-// POST /api/subscriptions/check - проверить подписки текущего пользователя
+// POST /api/subscriptions/check-by-category - проверить подписки категории текущего пользователя
+// Body: { categoryId: string } — id категории или '__none__' для подписок без категории
 export async function POST(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
+    const body = await request.json().catch(() => ({}));
+    const categoryId = typeof body.categoryId === 'string' ? body.categoryId : null;
+    if (!categoryId) {
+      return NextResponse.json({ error: 'categoryId required' }, { status: 400 });
+    }
+
     ensureQueueWorker();
+
+    const whereCategory =
+      categoryId === '__none__' ? { categoryId: null } : { categoryId };
+
     const subscriptions = await db.subscription.findMany({
-      where: { userId: session.user.id, isActive: true },
+      where: {
+        userId: session.user.id,
+        isActive: true,
+        ...whereCategory,
+      },
       include: { channel: true },
     });
 
@@ -60,10 +66,13 @@ export async function POST(request: NextRequest) {
       results,
     });
   } catch (error) {
-    if (isClientAbortError(error)) {
+    const msg = error instanceof Error ? error.message : String(error);
+    const isAbort =
+      msg.includes('Controller is already closed') || msg.includes('aborted') || msg.includes('AbortError');
+    if (isAbort) {
       return NextResponse.json({ success: false, aborted: true, checked: 0, results: [] });
     }
-    console.error('Error checking subscriptions:', error);
+    console.error('Error checking subscriptions by category:', error);
     return NextResponse.json({ error: 'Failed to check subscriptions' }, { status: 500 });
   }
 }

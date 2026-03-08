@@ -87,12 +87,10 @@ export async function GET(
       }
       const chunkSize = end - start + 1;
 
-      const nodeStream = createReadStream(filePath, {
-        start,
-        end,
-        ...(request.signal && { signal: request.signal }),
-      });
-      nodeStream.on('error', () => {}); // избегаем uncaughtException при отмене/закрытии
+      // Не передаём request.signal — при отключении клиента createReadStream+Readable.toWeb
+      // дают гонку и "Controller is already closed". Соединение закроется при записи в сокет.
+      const nodeStream = createReadStream(filePath, { start, end });
+      nodeStream.on('error', () => {}); // игнорируем ошибки при закрытии клиентом
       const webStream = Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
 
       const headers: Record<string, string> = {
@@ -105,10 +103,9 @@ export async function GET(
       return new NextResponse(webStream, { status: 206, headers });
     }
 
-    const nodeStream = createReadStream(filePath, {
-      ...(request.signal && { signal: request.signal }),
-    });
-    nodeStream.on('error', () => {}); // избегаем uncaughtException при отмене/закрытии
+    // Не передаём request.signal — избегаем "Controller is already closed" при отключении клиента
+    const nodeStream = createReadStream(filePath);
+    nodeStream.on('error', () => {}); // игнорируем ошибки при закрытии клиентом
     const webStream = Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
 
     const headers: Record<string, string> = {

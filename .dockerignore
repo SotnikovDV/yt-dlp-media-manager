@@ -1,3 +1,11 @@
+# Исключить старые маршруты (страницы перенесены в (main)/admin и (main)/profile)
+src/app/admin
+src/app/profile
+
+Backup
+**/Backup
+@eaDir
+**/@eaDir
 node_modules
 .next
 .git
@@ -11,3 +19,4 @@ downloads
 *.db-journal
 dev.log
 server.log
+backup.ps1

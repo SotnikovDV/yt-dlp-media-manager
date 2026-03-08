@@ -19,6 +19,8 @@ node_modules
 
 # production
 /build
+deploy*.*
+backup.ps1
 
 # misc
 .DS_Store
@@ -41,6 +43,7 @@ yarn-error.log*
 
 # local data (tools/db/downloads)
 /data/
+/download/
 /downloads/
 
 # backups / archives
@@ -71,3 +74,7 @@ server.log
 
 # Internal docs (not for public repo)
 .docs/
+
+# Design / IDE backups
+.design-backup
+mcps

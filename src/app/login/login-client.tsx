@@ -59,7 +59,7 @@ export default function LoginClient() {
         toast.error('Неверный логин или пароль');
         return;
       }
-      router.push(from);
+      router.replace(from);
     } catch (e: unknown) {
       toast.error((e as Error)?.message || 'Ошибка входа. Проверьте подключение и попробуйте снова.');
     } finally {

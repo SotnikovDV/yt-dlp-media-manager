@@ -8,6 +8,8 @@ import { env } from '@/lib/env';
 import { toRelativeFilePath } from '@/lib/path-utils';
 import { downloadAndSaveChannelAvatar } from '@/lib/avatars';
 import { downloadAndSaveVideoThumbnail } from '@/lib/thumbnails';
+import { checkSubscription } from '@/lib/subscription-checker';
+import { writeQueueLog } from '@/lib/queue-logger';
 
 const CLEANUP_TICK_INTERVAL = 20; // очистка старых completed раз в ~60 сек (tick каждые 3 сек)
 const COMPLETED_KEEP_HOURS = 24;
@@ -49,6 +51,7 @@ declare global {
         started: boolean;
         ready?: Promise<void>;
         interval?: NodeJS.Timeout;
+        subSchedulerInterval?: NodeJS.Timeout;
         running: boolean;
         tickCount: number;
       }
@@ -153,6 +156,65 @@ async function isQueuePaused(): Promise<boolean> {
   }
 }
 
+const SUBSCRIPTION_SCHEDULER_CONCURRENCY = 3;
+const DUE_CANDIDATES_MIN_AGE_MS = 60 * 60 * 1000; // 1 час — кандидаты для фильтрации по checkInterval
+const DUE_TAKE_LIMIT = 20;
+
+async function runSubscriptionScheduler() {
+  if (!env.subscriptionAutoCheckEnabled()) return;
+
+  const activeCount = await db.downloadTask.count({
+    where: { status: { in: ['downloading', 'processing'] } },
+  });
+  if (activeCount > 0) return;
+
+  const now = Date.now();
+  const minLastCheck = new Date(now - DUE_CANDIDATES_MIN_AGE_MS);
+  const candidates = await db.subscription.findMany({
+    where: {
+      isActive: true,
+      OR: [{ lastCheckAt: null }, { lastCheckAt: { lt: minLastCheck } }],
+    },
+    include: { channel: true },
+    take: DUE_TAKE_LIMIT,
+  });
+
+  const due = candidates.filter((sub) => {
+    if (!sub.lastCheckAt) return true;
+    const dueAt = sub.lastCheckAt.getTime() + sub.checkInterval * 60 * 1000;
+    return dueAt <= now;
+  });
+  if (due.length === 0) return;
+
+  let totalEnqueued = 0;
+  for (let i = 0; i < due.length; i += SUBSCRIPTION_SCHEDULER_CONCURRENCY) {
+    const chunk = due.slice(i, i + SUBSCRIPTION_SCHEDULER_CONCURRENCY);
+    const results = await Promise.all(chunk.map((sub) => checkSubscription(sub)));
+    for (const r of results) {
+      if ('newFound' in r) {
+        totalEnqueued += r.newFound;
+        writeQueueLog('info', 'subscription_check', {
+          channelId: r.channelId,
+          channelName: r.channelName,
+          checked: r.checked,
+          newFound: r.newFound,
+        });
+      } else {
+        writeQueueLog('error', 'subscription_check', {
+          channelId: r.channelId,
+          channelName: r.channelName,
+          error: r.error,
+        });
+      }
+    }
+  }
+  writeQueueLog('info', 'subscription_check_batch', {
+    subscriptionsChecked: due.length,
+    newEnqueued: totalEnqueued,
+  });
+  console.log('[subscription-scheduler] checked', due.length, 'subscriptions, new enqueued:', totalEnqueued);
+}
+
 async function cleanupOldCompletedTasks() {
   try {
     const before = new Date();
@@ -194,6 +256,7 @@ async function tick() {
         db.downloadTask.findFirst({
           where: { status: 'pending' },
           orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
+          include: { subscription: true },
         })
       );
 
@@ -209,6 +272,7 @@ async function tick() {
       if (claim.count !== 1) continue;
 
       activeCount++;
+      writeQueueLog('info', 'start', { taskId: task.id, url: task.url });
 
       // Небольшая пауза между стартами, чтобы снизить пиковую нагрузку на SQLite
       if (activeCount < maxConcurrent) await new Promise((r) => setTimeout(r, 150));
@@ -224,16 +288,43 @@ async function tick() {
             data: { videoId, title: task.title || video.title },
           });
         } catch (e: any) {
+          const errorMsg = e?.message || 'Failed to fetch video metadata';
+          writeQueueLog('error', 'failed', { taskId: task.id, errorMsg });
           await db.downloadTask.update({
             where: { id: task.id },
             data: {
               status: 'failed',
-              errorMsg: e?.message || 'Failed to fetch video metadata',
+              errorMsg,
               completedAt: new Date(),
             },
           });
           activeCount--;
           continue;
+        }
+      }
+
+      // Отсечка по дате публикации: задача из подписки — не качаем видео старше окна downloadDays
+      if (task.subscriptionId && task.subscription) {
+        const video = await db.video.findUnique({
+          where: { id: videoId! },
+          select: { publishedAt: true, title: true },
+        });
+        if (video?.publishedAt) {
+          const cutoff = new Date();
+          cutoff.setDate(cutoff.getDate() - task.subscription.downloadDays);
+          if (video.publishedAt < cutoff) {
+            await db.downloadTask.update({
+              where: { id: task.id },
+              data: {
+                status: 'completed',
+                progress: 100,
+                completedAt: new Date(),
+                errorMsg: null,
+              },
+            });
+            activeCount--;
+            continue;
+          }
         }
       }
 
@@ -308,18 +399,22 @@ async function tick() {
                 });
               }
             }
+            writeQueueLog('info', 'completed', { taskId: task.id, filePath: pathToStore });
             return;
           }
 
+          writeQueueLog('error', 'failed', { taskId: task.id, errorMsg: result.error || 'Unknown error' });
           await db.downloadTask.update({
             where: { id: task.id },
             data: { status: 'failed', errorMsg: result.error || 'Unknown error', completedAt },
           });
         })
         .catch(async (err) => {
+          const errorMsg = err?.message || 'Unknown error';
+          writeQueueLog('error', 'failed', { taskId: task.id, errorMsg });
           await db.downloadTask.update({
             where: { id: task.id },
-            data: { status: 'failed', errorMsg: err?.message || 'Unknown error', completedAt: new Date() },
+            data: { status: 'failed', errorMsg, completedAt: new Date() },
           });
         });
     }
@@ -359,6 +454,13 @@ export function ensureQueueWorker(): Promise<void> {
           console.error('Queue worker tick failed:', e);
         });
       }, 3000);
+
+      const schedulerIntervalMin = env.subscriptionSchedulerIntervalMin();
+      state.subSchedulerInterval = setInterval(() => {
+        void runSubscriptionScheduler().catch((e) => {
+          console.error('Subscription scheduler failed:', e);
+        });
+      }, schedulerIntervalMin * 60 * 1000);
     });
 
   return state.ready;

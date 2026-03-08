@@ -1,0 +1,273 @@
+'use client';
+
+import { useState } from 'react';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import { signOut, useSession } from 'next-auth/react';
+import { useQuery } from '@tanstack/react-query';
+import {
+  Video,
+  Rss,
+  Download,
+  Settings,
+  User,
+  Shield,
+  LogOut,
+  Menu,
+  X,
+  FolderOpen,
+} from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { cn } from '@/lib/utils';
+
+const NAV_ITEMS = [
+  { id: 'library', label: 'Медиатека', href: '/library' },
+  { id: 'subscriptions', label: 'Подписки', href: '/subscriptions' },
+  { id: 'queue', label: 'Очередь', href: '/queue' },
+] as const;
+
+export function AppShell({ children }: { children: React.ReactNode }) {
+  const { data: session } = useSession();
+  const pathname = usePathname();
+
+  const userDisplay = session?.user?.name || session?.user?.email || (session?.user as { username?: string })?.username || 'Пользователь';
+  const userId = (session?.user as { id?: string })?.id;
+  const avatarSrc = userId ? `/api/avatar/${userId}` : undefined;
+  const initials = String(userDisplay || 'U')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((s) => s[0]?.toUpperCase())
+    .join('');
+  const isAdmin = (session?.user as { isAdmin?: boolean })?.isAdmin === true;
+
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [userMenuOpenHeader, setUserMenuOpenHeader] = useState(false);
+  const [userMenuOpenSidebar, setUserMenuOpenSidebar] = useState(false);
+
+  const { data: stats } = useQuery({
+    queryKey: ['stats'],
+    queryFn: async () => {
+      const res = await fetch('/api/stats');
+      if (!res.ok) throw new Error('Failed to fetch stats');
+      return res.json();
+    },
+  });
+
+  const UserMenu = ({
+    compact,
+    open,
+    onOpenChange,
+  }: {
+    compact?: boolean;
+    open?: boolean;
+    onOpenChange?: (open: boolean) => void;
+  }) => {
+    if (!userId) return null;
+    return (
+      <DropdownMenu open={open} onOpenChange={(v) => onOpenChange?.(v)}>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            className={cn('rounded-full cursor-pointer', compact ? '' : 'ml-auto')}
+            title={userDisplay}
+          >
+            <Avatar className="h-8 w-8">
+              <AvatarImage src={avatarSrc} alt={userDisplay} />
+              <AvatarFallback className="text-xs">
+                {initials || <User className="h-4 w-4" />}
+              </AvatarFallback>
+            </Avatar>
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuLabel className="truncate">{userDisplay}</DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem asChild>
+            <Link href="/profile">
+              <User className="mr-2 h-4 w-4" />
+              Профиль
+            </Link>
+          </DropdownMenuItem>
+          {isAdmin && (
+            <>
+              <DropdownMenuItem asChild>
+                <Link href="/settings">
+                  <Settings className="mr-2 h-4 w-4" />
+                  Настройки
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link href="/admin">
+                  <Shield className="mr-2 h-4 w-4" />
+                  Админка
+                </Link>
+              </DropdownMenuItem>
+            </>
+          )}
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={() => signOut({ callbackUrl: '/login' })}>
+            <LogOut className="mr-2 h-4 w-4" />
+            Выйти
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  };
+
+  const isNavActive = (item: (typeof NAV_ITEMS)[number]) => pathname === item.href;
+
+  return (
+    <div className="min-h-screen bg-background">
+      {/* Мобильная шапка — Material top app bar */}
+      <header className="lg:hidden fixed top-0 left-0 right-0 h-14 surface elevation-2 z-50 flex items-center px-4">
+        <Button variant="ghost" size="icon" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
+          {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+        </Button>
+        <h1 className="ml-2 text-xl font-medium tracking-tight">Media Manager</h1>
+        <div className="ml-auto">
+          <UserMenu compact open={userMenuOpenHeader} onOpenChange={setUserMenuOpenHeader} />
+        </div>
+      </header>
+
+      {/* Мобильное меню */}
+      {mobileMenuOpen && (
+        <div className="lg:hidden fixed inset-0 top-14 bg-background z-40 p-4">
+          <nav className="space-y-1">
+            {NAV_ITEMS.map((item) => (
+              <Link
+                key={item.id}
+                href={item.href}
+                onClick={() => setMobileMenuOpen(false)}
+                className={cn(
+                  'flex items-center gap-3 w-full rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors',
+                  isNavActive(item)
+                    ? 'bg-primary/10 text-primary'
+                    : 'text-foreground hover:bg-muted'
+                )}
+              >
+                {item.id === 'library' && <Video className="h-5 w-5 shrink-0" />}
+                {item.id === 'subscriptions' && <Rss className="h-5 w-5 shrink-0" />}
+                {item.id === 'queue' && <Download className="h-5 w-5 shrink-0" />}
+                {item.label}
+              </Link>
+            ))}
+          </nav>
+        </div>
+      )}
+
+      {/* Десктопный сайдбар — Material navigation drawer */}
+      <aside
+        className={cn(
+          'hidden lg:flex flex-col fixed left-0 top-0 h-full surface border-r border-border/80 shadow-elevation-1 z-50 transition-all duration-300',
+          sidebarOpen ? 'w-64' : 'w-16'
+        )}
+      >
+        <div className="p-4 border-b border-border/80 flex items-center justify-between min-h-[56px]">
+          {sidebarOpen && (
+            <Link href="/library" className="text-xl font-medium tracking-tight text-foreground hover:text-primary transition-colors">
+              Media Manager
+            </Link>
+          )}
+          <Button variant="ghost" size="icon" onClick={() => setSidebarOpen(!sidebarOpen)}>
+            <FolderOpen className="h-4 w-4" />
+          </Button>
+        </div>
+
+        <nav className="flex-1 p-2 space-y-0.5">
+          {NAV_ITEMS.map((item) => (
+            <Link
+              key={item.id}
+              href={item.href}
+              className={cn(
+                'flex items-center rounded-lg py-2.5 text-sm font-medium transition-colors',
+                sidebarOpen ? 'px-3 gap-3' : 'px-0 justify-center',
+                isNavActive(item)
+                  ? 'bg-primary/10 text-primary'
+                  : 'text-foreground hover:bg-muted'
+              )}
+            >
+              {item.id === 'library' && <Video className={cn('h-5 w-5 shrink-0', sidebarOpen && 'ml-0')} />}
+              {item.id === 'subscriptions' && <Rss className={cn('h-5 w-5 shrink-0', sidebarOpen && 'ml-0')} />}
+              {item.id === 'queue' && <Download className={cn('h-5 w-5 shrink-0', sidebarOpen && 'ml-0')} />}
+              {sidebarOpen && <span>{item.label}</span>}
+            </Link>
+          ))}
+        </nav>
+
+        {sidebarOpen && stats && stats.videos != null && stats.channels != null && (
+          <div className="p-4 border-t border-border/80 space-y-2 text-sm text-muted-foreground">
+            <div className="flex justify-between">
+              <span>Видео:</span>
+              <span className="font-medium text-foreground">{stats.videos?.count ?? '—'}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Загрузок:</span>
+              <span className="font-medium text-foreground">{stats?.queue?.active ?? '—'}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Размер:</span>
+              <span className="font-medium text-foreground">{stats.videos?.totalSizeFormatted ?? '—'}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Подписки:</span>
+              <span className="font-medium text-foreground">{stats.channels?.subscriptions ?? '—'}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Обновление:</span>
+              <span className="font-medium text-foreground text-right truncate min-w-0 ml-2">
+                {stats.channels?.lastCheckAt
+                  ? new Date(stats.channels.lastCheckAt)
+                      .toLocaleString('ru-RU', {
+                        day: '2-digit',
+                        month: '2-digit',
+                        year: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })
+                      .replace(', ', ' ')
+                  : '—'}
+              </span>
+            </div>
+            {stats.disk && (
+              <div className="flex justify-between">
+                <span>Диск:</span>
+                <span className="font-medium text-foreground">{stats.disk.freeFormatted}</span>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className={cn('border-t border-border/80 p-3 flex items-center', sidebarOpen ? 'justify-between' : 'justify-center')}>
+          {sidebarOpen ? (
+            <div className="min-w-0">
+              <p className="text-sm font-medium truncate text-foreground">{userDisplay}</p>
+              <p className="text-xs text-muted-foreground truncate">{session?.user?.email || ''}</p>
+            </div>
+          ) : null}
+          <UserMenu open={userMenuOpenSidebar} onOpenChange={setUserMenuOpenSidebar} />
+        </div>
+      </aside>
+
+      <main
+        className={cn(
+          'transition-all duration-300 pt-14 lg:pt-0 min-h-screen',
+          sidebarOpen ? 'lg:ml-64' : 'lg:ml-16'
+        )}
+      >
+        <div className="p-4 lg:px-6 lg:pb-6 lg:pt-0">{children}</div>
+      </main>
+    </div>
+  );
+}

@@ -10,7 +10,7 @@
 - 📋 **Очередь** — управление задачами скачивания
 - 🎬 **Видеоплеер** — встроенный плеер для просмотра, публичные ссылки просмотра
 - 👥 **Авторизация** — регистрация, вход, профиль; OAuth (Google); панель администратора
-- 🐳 **Docker** — готовый контейнер для развёртывания на Synology NAS
+- 🐳 **Docker** — готовый контейнер для развёртывания на Synology и TerraMaster NAS
 
 ## Поддерживаемые платформы
 
@@ -54,6 +54,14 @@ yt-dlp поддерживает сотни видео-платформ:
 
    Откройте в браузере: `http://<IP-вашего-NAS>:3000`
 
+   **Важно про URL:** переменная окружения **`NEXTAUTH_URL`** должна **строго совпадать** с адресом, по которому вы реально открываете приложение (включая порт), иначе авторизация может не работать из‑за CSRF‑проверки NextAuth.
+
+   - Если вы заходите напрямую по IP и порту NAS (без обратного proxy), укажите, например:  
+     `NEXTAUTH_URL=http://192.168.1.10:3000`
+   - Если вы используете домен и обратный proxy (например, `https://media.example.com`), то `NEXTAUTH_URL` должен быть `https://media.example.com`, и заходить нужно именно по этому домену.
+
+   Для ссылок «Поделиться» и публичного просмотра используется **`BASE_URL`** — он должен указывать на **внешний публичный адрес**, через который к вам приходят пользователи (обычно домен за обратным proxy), и может отличаться от `NEXTAUTH_URL`.
+
    **Production:** для доступа извне добавьте в `environment` секцию `docker-compose.yml` переменные `NEXTAUTH_URL`, `BASE_URL`, `NEXTAUTH_SECRET` (см. раздел «Безопасность и production» ниже).
 
 ### Вариант 2: Docker через DSM
@@ -62,6 +70,65 @@ yt-dlp поддерживает сотни видео-платформ:
 2. Создайте новый проект
 3. Укажите путь к папке с `docker-compose.yml`
 4. Запустите контейнер
+
+## Установка на TerraMaster NAS
+
+TerraMaster TS F4-424 Pro (и другие модели с TOS 5) поддерживают Docker. NAS на Intel x86_64 — текущий образ работает нативно. Рекомендуется хранить данные на Vol 2 (не системном томе).
+
+### Вариант 1: Docker Manager (рекомендуется)
+
+1. **Подготовка папок**
+
+   В File Manager (TOS) создайте структуру на Vol 2:
+
+   ```text
+   /Volume2/docker/yt-dlp-manager/
+   ├── data/
+   │   ├── database/
+   │   └── tools/
+   │       └── linux-x64/   # yt-dlp, ffmpeg (опционально, для обновления без пересборки)
+   └── downloads/
+   ```
+
+2. **Установка Docker**
+
+   - TOS App Center → установите **Docker** (Docker Engine)
+   - Установите **Docker Manager** (GUI для контейнеров)
+
+3. **Загрузка и развёртывание**
+
+   - Загрузите `docker-compose.yml`, `Dockerfile` и `.dockerignore` в папку `/Volume2/docker/yt-dlp-manager/`
+   - Docker Manager → **Projects** → добавьте проект
+   - Укажите путь к папке с `docker-compose.yml`
+   - Для production задайте переменные `NEXTAUTH_URL`, `BASE_URL`, `NEXTAUTH_SECRET` (см. раздел «Безопасность и production»).  
+     При этом:
+     - `NEXTAUTH_URL` — фактический URL, по которому вы открываете UI (IP+порт или домен).
+     - `BASE_URL` — внешний адрес для ссылок (обычно домен за обратным proxy).
+   - Запустите сборку и контейнер
+
+4. **Запуск через SSH** (альтернатива)
+
+   ```bash
+   cd /Volume2/docker/yt-dlp-manager
+   docker-compose up -d --build
+   ```
+
+5. **Доступ**
+
+   Откройте в браузере: `http://<IP-вашего-NAS>:3000`
+
+### Вариант 2: Docker через Portainer
+
+Portainer даёт удобный веб-интерфейс для управления контейнерами и stacks.
+
+1. Установите Portainer из App Center (если доступен) или вручную через Docker
+2. Portainer → **Stacks** → **Add stack**
+3. Вставьте содержимое `docker-compose.yml` с нужными путями volumes (например `/Volume2/docker/yt-dlp-manager/data:/data`)
+4. Добавьте production-переменные и разверните
+
+**Примечание:** TerraMaster F4-424 Pro на Intel Core i3-N305 (x86_64) — используйте `linux-x64` в `TOOLS_DIR` при необходимости отдельных бинарников.
+
+## Установка (готовый образ)
 
 ### Вариант 3: Готовый образ (Docker Hub / ghcr.io)
 
@@ -82,10 +149,21 @@ services:
       - DOWNLOAD_PATH=/data/downloads
       - TOOLS_DIR=/data/tools
       - NODE_ENV=production
+      # Вариант A: доступ напрямую по IP/порту NAS
+      # В этом случае вы открываете приложение, например, по http://192.168.1.10:3000
+      # и переменная NEXTAUTH_URL должна строго совпадать с этим адресом (иначе NextAuth может отклонять логин).
+      # - NEXTAUTH_URL=http://192.168.1.10:3000
+      # - BASE_URL=http://192.168.1.10:3000
+      #
+      # Вариант B: доступ только через домен и обратный proxy
+      # Пример: внешний адрес https://media.example.com приходит на proxy,
+      # proxy прокидывает внутрь на http://yt-dlp-manager:3000
+      # В этом случае:
+      # - NEXTAUTH_URL=https://media.example.com   # адрес, по которому вы реально открываете UI
+      # - BASE_URL=https://media.example.com       # адрес, который попадает в ссылки «Поделиться»
+      #
       # Для production обязательно задайте:
-      - NEXTAUTH_URL=https://your-domain.com
-      - BASE_URL=https://your-domain.com
-      - NEXTAUTH_SECRET=your-random-secret
+      # - NEXTAUTH_SECRET=your-random-secret       # openssl rand -base64 32
 ```
 
 ## Разработка
@@ -134,23 +212,27 @@ npm run db:generate # Генерация Prisma-клиента
 │   │   │   ├── videos/        # Управление видео, секции, избранное, просмотры
 │   │   │   ├── download/      # Скачивание
 │   │   │   ├── queue/         # Очередь задач
-│   │   │   ├── subscriptions/# Подписки
+│   │   │   ├── subscriptions/# Подписки (в т.ч. [id]/check — ручная проверка)
+│   │   │   ├── playlists/     # Плейлисты
 │   │   │   ├── stream/        # Стриминг видео
 │   │   │   ├── stats/         # Статистика
 │   │   │   ├── settings/      # Настройки
 │   │   │   └── ...
+│   │   ├── (main)/            # Основной layout и вкладки (медиатека, подписки, очередь)
 │   │   ├── login/             # Страница входа
 │   │   ├── register/          # Регистрация
 │   │   ├── profile/           # Профиль пользователя
 │   │   ├── admin/             # Панель администратора
 │   │   ├── watch/[id]/        # Публичный просмотр видео
 │   │   ├── layout.tsx         # Корневой layout
-│   │   ├── page.tsx           # Главная страница (SPA)
 │   │   └── providers.tsx      # React Query, Session провайдеры
 │   ├── lib/
 │   │   ├── db.ts              # Prisma клиент
 │   │   ├── auth.ts            # NextAuth конфигурация
 │   │   ├── ytdlp.ts           # Интеграция с yt-dlp
+│   │   ├── deps.ts            # Поиск yt-dlp/ffmpeg, getQueueLogDir
+│   │   ├── queue-worker.ts    # Воркер очереди и планировщик подписок
+│   │   ├── queue-logger.ts    # Запись в queue.log
 │   │   └── utils.ts           # Утилиты
 │   └── components/            # UI компоненты (shadcn/ui и др.)
 ├── prisma/
@@ -172,7 +254,9 @@ npm run db:generate # Генерация Prisma-клиента
 | GET | /api/queue | Очередь задач |
 | GET | /api/subscriptions | Список подписок |
 | POST | /api/subscriptions | Создать подписку |
-| POST | /api/subscriptions/check | Проверить новые видео |
+| POST | /api/subscriptions/check | Проверить новые видео (массово) |
+| POST | /api/subscriptions/[id]/check | Проверить одну подписку на новые видео |
+| GET | /api/playlists | Список плейлистов |
 | GET | /api/stats | Статистика системы |
 | GET | /api/settings | Настройки |
 | GET | /api/stream/[id] | Стриминг видео |
@@ -193,13 +277,20 @@ npm run db:generate # Генерация Prisma-клиента
 | NEXTAUTH_URL | URL приложения (в production — реальный адрес) | http://localhost:3000 |
 | BASE_URL | Базовый адрес сервера (для ссылок «Поделиться» и публичной страницы) | http://localhost:3000 |
 | NEXTAUTH_SECRET | Секрет для подписи JWT/сессий (обязательно в production) | — |
+| INITIAL_ADMIN_PASSWORD | Пароль учётной записи admin при первом запуске (в production задайте свой; в development по умолчанию admin) | — |
 | GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET | OAuth Google (опционально) | — |
+| QUEUE_LOG_LEVEL | Уровень журнала очереди и подписок: `none`, `error`, `warn`, `info`, `debug` | info |
+| QUEUE_MAX_CONCURRENT_DOWNLOADS | Максимум одновременных загрузок в очереди | 1 |
 
 ### Безопасность и production
 
 - **NEXTAUTH_SECRET** в production **обязателен**: без него приложение не должно работать (или выдаст ошибку). Задайте длинную случайную строку, например: `openssl rand -base64 32`.
 - **NEXTAUTH_URL** и **BASE_URL** в production укажите на реальный адрес приложения (например, `https://your-domain.com`).
-- При первом развёртывании создаётся учётная запись администратора по умолчанию. **Сразу после первого входа** зайдите в раздел «Профиль» и смените пароль.
+- **INITIAL_ADMIN_PASSWORD**: в production задайте переменную для пароля учётной записи `admin` при первом запуске; **сразу после первого входа** смените пароль в разделе «Профиль». Без этой переменной в production учётная запись admin не создаётся (создайте пользователя через /register и назначьте права вручную в БД или задайте INITIAL_ADMIN_PASSWORD).
+
+### Ошибки «Failed to resolve» (i.ytimg.com, googlevideo.com)
+
+Если при загрузке с YouTube появляются ошибки вида `Failed to resolve 'i.ytimg.com'` или `googlevideo.com` (getaddrinfo failed / Errno 11001 на Windows, Errno -3 в Docker) — это проблема DNS. На ПК смените DNS на 8.8.8.8 и 8.8.4.4; в Docker добавьте в `docker-compose.yml` секцию `dns: [8.8.8.8, 8.8.4.4]`. Подробнее: [.docs/DNS_AND_NETWORK.md](.docs/DNS_AND_NETWORK.md).
 
 ### Если yt-dlp / ffmpeg не установлены
 
@@ -226,15 +317,24 @@ data/tools/
     ffmpeg
 ```
 
+В подпапке **`log`** того каталога, где лежит yt-dlp (например `data/tools/windows/log/`), автоматически создаётся файл **`queue.log`** — журнал очереди загрузки и проверок подписок (уровень задаётся `QUEUE_LOG_LEVEL`).
+
 Примечания:
 
 - Для Docker на Synology обычно нужен `linux-arm64` (если NAS на ARM) или `linux-x64` (если NAS на x86_64).
+- Для TerraMaster F4-424 Pro (Intel x86_64) используйте `linux-x64`.
 - Можно переопределить точные пути через `YTDLP_PATH`/`FFMPEG_PATH` (имеют приоритет над `TOOLS_DIR`).
+- В подпапке **`log`** каталога с yt-dlp (или `TOOLS_DIR/log`, если yt-dlp из PATH) ведётся журнал очереди и подписок — файл **`queue.log`**. Уровень детализации задаётся переменной **`QUEUE_LOG_LEVEL`** (см. таблицу выше).
+- Docker-образ основан на Alpine (musl). Если вы кладёте собственный бинарь yt-dlp в `TOOLS_DIR` (например, в `linux-x64/yt-dlp`), используйте **musl‑сборку** (`yt-dlp_musllinux` для x86_64), а не `yt-dlp_linux` под glibc — иначе утилита может не запускаться и в `/api/deps` будет отображаться как «не установлена».
 
 Проверка статуса доступна через:
 
 - `GET /api/deps`
 - `GET /api/stats` (поле `deps`)
+
+### Журнал очереди и подписок
+
+В подпапке **`log`** папки, где лежит yt-dlp (при установке из PATH — в `TOOLS_DIR`), создаётся файл **`queue.log`**. В него пишутся события: старт/завершение/ошибки задач скачивания, проверки подписок (плановые и ручные). Уровень детализации задаётся переменной **`QUEUE_LOG_LEVEL`** (`none` — отключить, `error`, `warn`, `info`, `debug`). По умолчанию используется `info`.
 
 ### Качество видео
 
@@ -247,6 +347,14 @@ data/tools/
 - `mp4` - универсальный формат (по умолчанию)
 - `mkv` - Matroska, хорош для больших файлов
 - `webm` - WebM формат
+
+### Подписки
+
+**Ограничение по глубине (downloadDays)**. Для каждой подписки можно задать глубину в днях (например, 30). При проверке обновлений в очередь добавляются только видео, опубликованные не раньше чем `сегодня − downloadDays`.
+
+**Фильтрация по дате публикации**. yt-dlp в режиме `--flat-playlist` для канала может не возвращать поле `upload_date` или возвращать `"NA"`. В таких случаях приложение **исключает** видео из результата — дату публикации проверить нельзя. Включаются только видео с валидной датой в формате YYYYMMDD, удовлетворяющей ограничению глубины. Это предотвращает попадание старых видео (до 2 лет и более) в очередь при установленном ограничении в 30 дней.
+
+Переменные окружения: `DEFAULT_SUBSCRIPTION_HISTORY_DAYS` (дней истории при добавлении подписки), `SUBSCRIPTION_CHECK_VIDEO_LIMIT` (макс. видео при проверке), `DEFAULT_CHECK_INTERVAL` (интервал проверки в минутах).
 
 ## Лицензия
 

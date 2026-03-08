@@ -4,7 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000 -H 0.0.0.0",
-    "build": "next build && node scripts/postbuild.mjs",
+    "clean": "node -e \"require('fs').rmSync('.next', { recursive: true, force: true })\"",
+    "prebuild": "node -e \"const fs=require('fs'); const p='.next/standalone'; try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {}\"",
+    "build": "npm run prebuild && next build && node scripts/postbuild.mjs",
     "start": "node scripts/start-standalone.mjs",
     "lint": "eslint .",
     "db:push": "prisma db push",

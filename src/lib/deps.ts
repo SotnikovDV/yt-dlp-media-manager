@@ -128,6 +128,22 @@ export function resolveToolCommand(tool: ToolName): string {
   return defaultCommandForTool(tool);
 }
 
+/** Каталог, где лежит yt-dlp (для подпапки log и т.д.). Если из PATH — TOOLS_DIR. */
+export function getYtDlpDir(): string {
+  const configured = envPathForTool('yt-dlp');
+  if (configured?.trim() && path.isAbsolute(configured)) {
+    return path.dirname(configured);
+  }
+  const tools = toolsDirCandidates('yt-dlp');
+  if (tools.length > 0) return path.dirname(tools[0]);
+  return getDefaultToolsDir();
+}
+
+/** Подпапка log в каталоге yt-dlp — сюда пишем queue.log. */
+export function getQueueLogDir(): string {
+  return path.join(getYtDlpDir(), 'log');
+}
+
 export async function checkTool(tool: ToolName): Promise<ToolStatus> {
   const args = tool === 'yt-dlp' ? ['--version'] : ['-version'];
 

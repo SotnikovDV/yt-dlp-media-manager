@@ -5,7 +5,7 @@ import { db } from '@/lib/db';
 import sharp from 'sharp';
 import path from 'path';
 import { mkdir, writeFile } from 'fs/promises';
-import { getProjectRoot } from '@/lib/runtime-paths';
+import { getDataRoot } from '@/lib/runtime-paths';
 
 export const runtime = 'nodejs';
 
@@ -30,12 +30,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Слишком большой файл (макс 5MB)' }, { status: 400 });
   }
 
-  const projectRoot = getProjectRoot();
-  const avatarsDir = path.join(projectRoot, 'data', 'avatars');
+  const dataRoot = getDataRoot();
+  const avatarsDir = path.join(dataRoot, 'avatars');
   await mkdir(avatarsDir, { recursive: true });
 
   const outRel = path.join('data', 'avatars', `${session.user.id}.webp`);
-  const outAbs = path.join(projectRoot, outRel);
+  const outAbs = path.join(dataRoot, 'avatars', `${session.user.id}.webp`);
 
   const out = await sharp(buf)
     .rotate()

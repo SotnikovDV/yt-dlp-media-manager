@@ -1,17 +1,24 @@
 "use client"
 
+/**
+ * Выпадающее меню на базе Radix UI.
+ * Используется для контекстных меню, меню действий и т.п.
+ */
+
 import * as React from "react"
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu"
 import { CheckIcon, ChevronRightIcon, CircleIcon } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
+/** Корневой компонент меню. Управляет состоянием открыто/закрыто. */
 function DropdownMenu({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
   return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...props} />
 }
 
+/** Выводит контент в портал (document.body по умолчанию) для корректного позиционирования поверх страницы. */
 function DropdownMenuPortal({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Portal>) {
@@ -20,6 +27,7 @@ function DropdownMenuPortal({
   )
 }
 
+/** Элемент, по клику/наведению на который открывается меню (кнопка, иконка и т.д.). */
 function DropdownMenuTrigger({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Trigger>) {
@@ -31,13 +39,18 @@ function DropdownMenuTrigger({
   )
 }
 
+/** Контейнер содержимого меню. Рендерится в портале, позиционируется рядом с триггером.
+ *  container — для fullscreen: передайте fullscreen-элемент, чтобы меню отображалось внутри него. */
 function DropdownMenuContent({
   className,
   sideOffset = 4,
+  container,
   ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.Content>) {
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Content> & {
+  container?: HTMLElement | null
+}) {
   return (
-    <DropdownMenuPrimitive.Portal>
+    <DropdownMenuPrimitive.Portal container={container ?? undefined}>
       <DropdownMenuPrimitive.Content
         data-slot="dropdown-menu-content"
         sideOffset={sideOffset}
@@ -51,6 +64,7 @@ function DropdownMenuContent({
   )
 }
 
+/** Группа пунктов меню. Разбивает пункты на логические блоки. */
 function DropdownMenuGroup({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Group>) {
@@ -59,6 +73,7 @@ function DropdownMenuGroup({
   )
 }
 
+/** Пункт меню. Поддерживает inset (отступ слева) и variant (default/destructive для опасных действий). */
 function DropdownMenuItem({
   className,
   inset,
@@ -82,6 +97,7 @@ function DropdownMenuItem({
   )
 }
 
+/** Пункт-чекбокс. Отображает галочку при checked={true}, для переключаемых опций. */
 function DropdownMenuCheckboxItem({
   className,
   children,
@@ -108,6 +124,7 @@ function DropdownMenuCheckboxItem({
   )
 }
 
+/** Группа взаимно исключаемых пунктов (radio). Только один пункт выбран одновременно. */
 function DropdownMenuRadioGroup({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.RadioGroup>) {
@@ -119,6 +136,7 @@ function DropdownMenuRadioGroup({
   )
 }
 
+/** Пункт в RadioGroup. Отображает кружок при выборе. */
 function DropdownMenuRadioItem({
   className,
   children,
@@ -143,6 +161,7 @@ function DropdownMenuRadioItem({
   )
 }
 
+/** Заголовок секции в меню. Не кликабелен, используется для разделения групп. */
 function DropdownMenuLabel({
   className,
   inset,
@@ -163,6 +182,7 @@ function DropdownMenuLabel({
   )
 }
 
+/** Горизонтальная линия-разделитель между пунктами или группами. */
 function DropdownMenuSeparator({
   className,
   ...props
@@ -176,6 +196,7 @@ function DropdownMenuSeparator({
   )
 }
 
+/** Вспомогательный span для отображения горячей клавиши справа от пункта. */
 function DropdownMenuShortcut({
   className,
   ...props
@@ -192,12 +213,14 @@ function DropdownMenuShortcut({
   )
 }
 
+/** Подменю: вложенное выпадающее меню, открывается по наведению/клику на SubTrigger. */
 function DropdownMenuSub({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Sub>) {
   return <DropdownMenuPrimitive.Sub data-slot="dropdown-menu-sub" {...props} />
 }
 
+/** Пункт, при наведении/клике на который открывается вложенное подменю. */
 function DropdownMenuSubTrigger({
   className,
   inset,
@@ -222,6 +245,7 @@ function DropdownMenuSubTrigger({
   )
 }
 
+/** Контейнер содержимого вложенного подменю. */
 function DropdownMenuSubContent({
   className,
   ...props

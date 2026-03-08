@@ -5,7 +5,7 @@ import { db } from '@/lib/db';
 import path from 'path';
 import { existsSync, createReadStream } from 'fs';
 import { Readable } from 'stream';
-import { getProjectRoot } from '@/lib/runtime-paths';
+import { getDataRoot } from '@/lib/runtime-paths';
 
 export const runtime = 'nodejs';
 
@@ -25,13 +25,14 @@ export async function GET(
   const user = await db.user.findUnique({ where: { id }, select: { avatarPath: true } });
   if (!user?.avatarPath) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
-  const projectRoot = getProjectRoot();
-  const abs = path.isAbsolute(user.avatarPath) ? user.avatarPath : path.join(projectRoot, user.avatarPath);
+  const dataRoot = getDataRoot();
+  const abs = path.isAbsolute(user.avatarPath)
+    ? user.avatarPath
+    : path.join(dataRoot, user.avatarPath.replace(/^data[/\\]/, ''));
   if (!existsSync(abs)) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
-  const nodeStream = createReadStream(abs, {
-    ...(request.signal && { signal: request.signal }),
-  });
+  // Не передаём request.signal — избегаем "Controller is already closed" при отключении клиента
+  const nodeStream = createReadStream(abs);
   nodeStream.on('error', () => {});
   const webStream = Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
   return new NextResponse(webStream, {

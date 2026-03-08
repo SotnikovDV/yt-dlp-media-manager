@@ -35,11 +35,11 @@ ENV DATABASE_URL=file:/data/database/media.db
 ENV DOWNLOAD_PATH=/data/downloads
 
 # Runtime deps: yt-dlp + ffmpeg
-RUN apk add --no-cache \
-    python3 \
-    py3-pip \
-    ffmpeg \
-    && pip3 install --no-cache-dir --break-system-packages yt-dlp
+# RUN apk add --no-cache \
+#    python3 \
+#    py3-pip \
+#    ffmpeg \
+#    && pip3 install --no-cache-dir --break-system-packages yt-dlp
 
 # Create directories
 RUN mkdir -p /data/downloads /data/database
@@ -53,12 +53,10 @@ COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
 
-# Create startup script
-RUN echo '#!/bin/sh' > /app/start.sh && \
-    echo 'cd /app && npx prisma db push --skip-generate' >> /app/start.sh && \
-    echo 'node server.js' >> /app/start.sh && \
-    chmod +x /app/start.sh
+# Entrypoint: бэкап БД -> prisma migrate deploy -> node server.js
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 EXPOSE 3000
 
-CMD ["/app/start.sh"]
+CMD ["/app/entrypoint.sh"]

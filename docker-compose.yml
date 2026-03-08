@@ -5,18 +5,58 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # network: host
     container_name: yt-dlp-media-manager
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "3001:3000"
     volumes:
-      - ./data:/data
-      - ./downloads:/data/downloads
+      - /volume2/docker/yt-dlp-media-manager/data:/data
+      - /volume1/youtube/yt-dlp-media:/data/downloads
+    # DNS: устраняет Errno -3 (Failed to resolve googlevideo.com) при загрузке с YouTube на NAS
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     environment:
       - DATABASE_URL=file:/data/database/media.db
       - DOWNLOAD_PATH=/data/downloads
       - TOOLS_DIR=/data/tools
       - NODE_ENV=production
+      # Production: раскомментируйте и задайте реальные значения
+      #
+      # Вариант A: доступ напрямую по IP/порту NAS
+      # Вы открываете приложение по адресу вида http://192.168.1.105:3001
+      # В этом случае NEXTAUTH_URL должен строго совпадать с этим URL (протокол, хост, порт),
+      # иначе NextAuth может отклонять логин из‑за защиты CSRF.
+      # - NEXTAUTH_URL=http://192.168.1.105:3001
+      # - BASE_URL=http://192.168.1.105:3001
+      #
+      # Вариант B: доступ через домен и обратный proxy
+      # Внешний адрес (например, https://media.example.com) приходит на proxy 
+      # и прокидывается внутрь на http://192.168.1.105:3001
+      # В этом случае:
+      - NEXTAUTH_URL=http://192.168.1.105:3001   # адрес, по которому вы реально открываете UI
+      - BASE_URL=https://media.example.com       # адрес для ссылок «Поделиться» и публичного просмотра (заданный на обратном прокси)
+      #
+      # Для production обязательно задайте:
+      # - NEXTAUTH_SECRET=  # openssl rand -base64 32
+      # Media (настройки медиа)
+      - DEFAULT_QUALITY=1080
+      - DEFAULT_FORMAT=mp4
+      - MEDIA_LIBRARY_RECENT_LIMIT=8          # кол-во карточек видео в списках "Последние скачанные" и "Последние просмотренные" и "Избранное"
+      # Downloads (Очередь загрузок)
+      - DEFAULT_SUBSCRIPTION_HISTORY_DAYS=10  # актуальность содержимого подписки по умолчанию (в днях) 
+      - DEFAULT_CHECK_INTERVAL=60             # интервал проверки обновлений подписок (мин, для каждой подписки)
+      - SUBSCRIPTION_AUTO_CHECK_ENABLED=1     # автопроверка подписок (1 — вкл, 0 — выкл)
+      - SUBSCRIPTION_SCHEDULER_INTERVAL_MIN=5 # интервал пробуждения планировщика (мин); при активных загрузках — пропуск
+      - SUBSCRIPTION_CHECK_VIDEO_LIMIT=50     # сколько видео за раз запрашивает yt-dlp при проверке обновлений подписки
+      - QUEUE_MAX_CONCURRENT_DOWNLOADS=3      # кол-во потоков для скачивания
+      # Таймаут yt-dlp (сек). При "Read timed out" на NAS увеличьте, например 120
+      - YTDLP_SOCKET_TIMEOUT=120
+      # Пути к утилитам (опционально, если не в PATH и не в /data/tools/)
+      # Если используются не из системы, не забыть назначить исполняемыми: >> chmod +x yt-dlp
+      # FFMPEG_PATH=/data/tools/linux-x64/bin/ffmpeg
+      # YTDLP_PATH=/data/tools/linux-x64/yt-dlp
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/stats').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -24,11 +64,5 @@ services:
       retries: 3
       start_period: 40s
 
-# For Synology NAS, you may want to use a specific volume path:
-# volumes:
-#   yt-dlp-data:
-#     driver: local
-#     driver_opts:
-#       type: none
-#       o: bind
-#       device: /volume1/docker/yt-dlp-manager/data
+# For Synology NAS, use volume path: /volume1/docker/yt-dlp-manager/data
+# For TerraMaster NAS (TOS 5), use volume path on Vol 2: /Volume2/docker/yt-dlp-manager/data

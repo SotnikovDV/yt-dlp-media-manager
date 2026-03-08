@@ -38,4 +38,13 @@ export const env = {
       MAX_QUEUE_MAX_CONCURRENT_DOWNLOADS,
       Math.max(1, getEnvInt('QUEUE_MAX_CONCURRENT_DOWNLOADS', 1))
     ),
+  subscriptionAutoCheckEnabled: () => getEnvInt('SUBSCRIPTION_AUTO_CHECK_ENABLED', 1) !== 0,
+  subscriptionSchedulerIntervalMin: () =>
+    Math.max(1, getEnvInt('SUBSCRIPTION_SCHEDULER_INTERVAL_MIN', 5)),
+  /** Уровень журнала очереди загрузки и подписок: none, error, warn, info, debug */
+  queueLogLevel: (): 'none' | 'error' | 'warn' | 'info' | 'debug' => {
+    const v = getEnv('QUEUE_LOG_LEVEL', 'info').toLowerCase().trim();
+    if (v === 'none' || v === 'error' || v === 'warn' || v === 'info' || v === 'debug') return v;
+    return 'info';
+  },
 };

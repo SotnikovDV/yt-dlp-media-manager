@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
-import { getChannelVideosSince } from '@/lib/ytdlp';
+import { getChannelVideosSince, buildYouTubeChannelUrl } from '@/lib/ytdlp';
 import { ensureQueueWorker } from '@/lib/queue-worker';
 import { env } from '@/lib/env';
 import { downloadAndSaveChannelAvatar } from '@/lib/avatars';
@@ -23,7 +23,7 @@ async function enqueueBackfill(subscriptionId: string) {
   });
   if (!sub || !sub.isActive) return;
 
-  const channelUrl = `https://www.youtube.com/channel/${sub.channel.platformId}`;
+  const channelUrl = buildYouTubeChannelUrl(sub.channel.platformId);
   const cutoffDate = new Date();
   cutoffDate.setDate(cutoffDate.getDate() - sub.downloadDays);
 
@@ -75,6 +75,22 @@ export async function GET() {
       },
       orderBy: { createdAt: 'desc' }
     });
+
+    // Счётчик «видео в библиотеке» — только скачанные (filePath не null), как в списке видео
+    const channelIds = subscriptions.map((s) => s.channel.id);
+    if (channelIds.length > 0) {
+      const downloadedCounts = await db.video.groupBy({
+        by: ['channelId'],
+        where: { channelId: { in: channelIds }, filePath: { not: null } },
+        _count: { id: true },
+      });
+      const countByChannel = Object.fromEntries(downloadedCounts.map((c) => [c.channelId, c._count.id]));
+      for (const sub of subscriptions) {
+        (sub.channel as { _count?: { videos?: number } })._count = {
+          videos: countByChannel[sub.channel.id] ?? 0,
+        };
+      }
+    }
 
     return NextResponse.json(subscriptions);
   } catch (error: any) {

@@ -1,11 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { ArrowLeft, FolderSync, ImageIcon, Loader2, Pencil, Plus, Shield, Tag, Trash2, Users } from 'lucide-react';
+import { FolderSync, ImageIcon, Loader2, Pencil, Plus, Shield, Tag, Trash2, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -285,7 +284,7 @@ export default function AdminPage() {
 
   if (status === 'loading' || (status === 'authenticated' && !isAdmin)) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="flex items-center justify-center py-12">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
       </div>
     );
@@ -294,26 +293,16 @@ export default function AdminPage() {
   const filteredUsers = filterPending && users ? users.filter((u) => !u.isAllowed) : users ?? [];
 
   return (
-    <div className="min-h-screen bg-background p-4 lg:p-6">
-      <div className="max-w-4xl mx-auto space-y-6">
-        <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Button variant="ghost" size="icon" asChild>
-              <Link href="/">
-                <ArrowLeft className="h-4 w-4" />
-              </Link>
-            </Button>
-            <div>
-              <h1 className="text-2xl font-bold flex items-center gap-2">
-                <Shield className="h-6 w-6" />
-                Управление пользователями
-              </h1>
-              <p className="text-sm text-muted-foreground">
-                Выдача и отзыв доступа к сайту, назначение администраторов
-              </p>
-            </div>
-          </div>
-        </div>
+    <div className="max-w-4xl mx-auto space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold flex items-center gap-2">
+          <Shield className="h-6 w-6" />
+          Администрирование приложения
+        </h1>
+        <p className="text-sm text-muted-foreground">
+          Управление правами, категориями и сервисные функции
+        </p>
+      </div>
 
         <Card>
           <CardHeader>
@@ -617,7 +606,6 @@ export default function AdminPage() {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
-      </div>
     </div>
   );
 }

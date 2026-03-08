@@ -1,5 +1,11 @@
 'use client';
 
+/**
+ * Главная страница приложения Media Manager.
+ * Медиатека, подписки на каналы, очередь загрузок, настройки, видеоплеер.
+ * Состояние вкладок в URL-пут: /library, /subscriptions, /queue, /settings. Остальные query — ?channelId=, ?fromTab=.
+ */
+
 import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -11,7 +17,7 @@ import {
   Play, Pause, Download as DownloadIcon, RefreshCw, Folder,
   Youtube, HardDrive, Clock, CheckCircle, XCircle, Loader2,
   Menu, X, ExternalLink, ChevronDown, ChevronUp, FolderOpen, FolderMinus, AlertTriangle,
-  Rss, Pencil, LogOut, User, Shield, Copy, Star, Share2, CalendarClock
+  Rss, Pencil, LogOut, User, Shield, Copy, Star, CalendarClock, ListPlus
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -37,6 +43,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
+  AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -55,6 +62,7 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { VideoPlayer } from '@/components/video-player';
 import { VideoCard, type VideoCardVideo } from '@/components/video-card';
+import { ShareVideoMenu } from '@/components/share-video-menu';
 import {
   Pagination,
   PaginationContent,
@@ -63,8 +71,16 @@ import {
   PaginationNext,
 } from '@/components/ui/pagination';
 import { useIsMobile } from '@/hooks/use-mobile';
+import type { PlaybackQueueContext, PlaybackQueueSource } from '@/lib/playback-queue';
+import {
+  getNextInQueue,
+  getPrevInQueue,
+  hasNextQueue,
+  hasPrevQueue,
+} from '@/lib/playback-queue';
 
-// Types
+// ——— Типы данных ———
+/** Видео: метаданные, канал, история просмотра, избранное. */
 interface VideoType {
   id: string;
   platformId: string;
@@ -78,6 +94,7 @@ interface VideoType {
   format: string | null;
   publishedAt: Date | string | null;
   downloadedAt: Date | null;
+  viewCount?: number | bigint | string | null;
   channel: {
     id: string;
     name: string;
@@ -91,6 +108,15 @@ interface VideoType {
   favorites?: { id: string }[];
 }
 
+/** Плейлист пользователя (из API). */
+interface PlaylistType {
+  id: string;
+  name: string;
+  createdAt: string;
+  videoIds: string[];
+}
+
+/** Подписка на канал: настройки загрузки, категория, канал. */
 interface SubscriptionType {
   id: string;
   downloadDays: number;
@@ -109,12 +135,15 @@ interface SubscriptionType {
   };
 }
 
+// Специальный ID для раздела «Отдельные видео» (не привязанные к каналу)
 const LIBRARY_INDIVIDUAL_CHANNEL_ID = '__individual__';
 
 const VIDEO_PLAYER_WINDOW_KEY = 'video-player-window';
-const VIDEO_WINDOW_MIN_WIDTH = 400;
-const VIDEO_WINDOW_MIN_HEIGHT = 225;
+// Минимальный размер плавающего окна видеоплеера (desktop)
+const VIDEO_WINDOW_MIN_WIDTH = 560;
+const VIDEO_WINDOW_MIN_HEIGHT = 315;
 
+/** Начальные размеры и позиция плавающего окна видеоплеера (центр экрана, 16:9). */
 function getDefaultVideoWindow(): { x: number; y: number; width: number; height: number } {
   if (typeof window === 'undefined') return { x: 0, y: 0, width: 960, height: 540 };
   const maxW = Math.floor(0.95 * window.innerWidth);
@@ -131,6 +160,7 @@ function getDefaultVideoWindow(): { x: number; y: number; width: number; height:
   };
 }
 
+/** Восстановление позиции/размера окна плеера из localStorage. */
 function loadVideoWindowFromStorage(): { x: number; y: number; width: number; height: number } | null {
   if (typeof window === 'undefined') return null;
   try {
@@ -156,6 +186,7 @@ function loadVideoWindowFromStorage(): { x: number; y: number; width: number; he
   }
 }
 
+/** Сохранение позиции/размера окна плеера в localStorage при закрытии. */
 function saveVideoWindowToStorage(bounds: { x: number; y: number; width: number; height: number }) {
   if (typeof window === 'undefined') return;
   try {
@@ -165,6 +196,7 @@ function saveVideoWindowToStorage(bounds: { x: number; y: number; width: number;
   }
 }
 
+/** Задача в очереди загрузки. */
 interface DownloadTaskType {
   id: string;
   url: string;
@@ -176,22 +208,27 @@ interface DownloadTaskType {
   quality: string | null;
   errorMsg: string | null;
   createdAt: Date;
+  completedAt?: Date | string | null;
   video?: {
+    id?: string;
     title: string;
     publishedAt: Date | string | null;
     channel?: { id: string; name: string };
   };
 }
 
+/** Статус утилиты (yt-dlp/ffmpeg): установлена или причина отсутствия и справка. */
 type ToolStatus =
   | { installed: true; version: string; path: string }
   | { installed: false; reason: 'not_found' | 'failed'; details?: string; help: Record<string, string> };
 
+/** Статусы зависимостей yt-dlp и ffmpeg. */
 interface DepsType {
   ytdlp: ToolStatus;
   ffmpeg: ToolStatus;
 }
 
+/** Сводная статистика: видео, каналы, очередь, диск, deps. */
 interface StatsType {
   baseUrl?: string;
   videos: { count: number; totalSize: number; totalSizeFormatted: string };
@@ -201,6 +238,24 @@ interface StatsType {
   disk?: { freeFormatted: string; usedFormatted: string; totalFormatted: string } | null;
 }
 
+/** Ответ API секций медиатеки: блоки «недавние», избранное, отдельные видео, по категориям. */
+type LibrarySectionsResponse = {
+  recentPublished: VideoType[];
+  recentDownloaded: VideoType[];
+  recentWatched: VideoType[];
+  favorites: VideoType[];
+  individualVideos: VideoType[];
+  categorySections?: {
+    categoryId: string | null;
+    name: string;
+    backgroundColor: string | null;
+    subscriptionsCount: number;
+    videos: VideoType[];
+  }[];
+  recentLimit?: number;
+};
+
+/** Парсит JSON ответа; при !res.ok бросает ошибку с data.error или статусом. */
 async function jsonOrThrow(res: Response) {
   let data: any = null;
   try {
@@ -219,20 +274,22 @@ async function jsonOrThrow(res: Response) {
   return data;
 }
 
-// API Functions
+// ——— API-клиент (все запросы к бэкенду) ———
 const api = {
   videos: {
-    list: async (params: { page?: number; limit?: number; search?: string; channelId?: string; sort?: string }) => {
+    list: async (params: { page?: number; limit?: number; search?: string; channelId?: string; categoryId?: string; ids?: string[]; sort?: string }) => {
       const query = new URLSearchParams();
       if (params.page != null && params.page > 0) query.set('page', String(params.page));
       if (params.limit != null && params.limit > 0) query.set('limit', String(params.limit));
       if (params.search) query.set('search', params.search);
       if (params.channelId) query.set('channelId', params.channelId);
+      if (params.categoryId) query.set('categoryId', params.categoryId);
+      if (params.ids && params.ids.length > 0) query.set('ids', params.ids.join(','));
       if (params.sort) query.set('sort', params.sort);
       const res = await fetch(`/api/videos?${query}`);
       return res.json();
     },
-    sections: async (limit?: number) => {
+    sections: async (limit?: number): Promise<LibrarySectionsResponse> => {
       const query = new URLSearchParams();
       if (limit) query.set('limit', String(limit));
       const res = await fetch(`/api/videos/sections?${query}`);
@@ -257,6 +314,37 @@ const api = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ isFavorite }),
       });
+      return jsonOrThrow(res);
+    },
+    byIds: async (ids: string[]) => {
+      if (ids.length === 0) return { videos: [] as VideoType[], pagination: null };
+      const res = await fetch(`/api/videos?ids=${ids.map((id) => encodeURIComponent(id)).join(',')}`);
+      return res.json();
+    },
+  },
+  playlists: {
+    list: async (): Promise<{ playlists: PlaylistType[] }> => {
+      const res = await fetch('/api/playlists');
+      return jsonOrThrow(res);
+    },
+    create: async (name: string, videoIds: string[] = []): Promise<PlaylistType> => {
+      const res = await fetch('/api/playlists', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim() || 'Новый плейлист', videoIds }),
+      });
+      return jsonOrThrow(res);
+    },
+    update: async (id: string, updates: { name?: string; videoIds?: string[] }): Promise<PlaylistType> => {
+      const res = await fetch(`/api/playlists/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      });
+      return jsonOrThrow(res);
+    },
+    delete: async (id: string): Promise<void> => {
+      const res = await fetch(`/api/playlists/${id}`, { method: 'DELETE' });
       return jsonOrThrow(res);
     },
   },
@@ -362,6 +450,14 @@ const api = {
       const res = await fetch(`/api/subscriptions/${id}/check`, { method: 'POST' });
       return jsonOrThrow(res);
     },
+    checkByCategory: async (categoryId: string) => {
+      const res = await fetch('/api/subscriptions/check-by-category', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ categoryId }),
+      });
+      return jsonOrThrow(res);
+    },
     cleanOld: async (id: string, body: { olderThanDays: number }) => {
       const res = await fetch(`/api/subscriptions/${id}/clean-old`, {
         method: 'POST',
@@ -437,14 +533,20 @@ function formatDuration(seconds: number | null): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-// Format date
 function formatDate(date: Date | string | null): string {
   if (!date) return '';
   const d = new Date(date);
   return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-// Format bytes (принимает и string — из JSON API BigInt приходит как строка)
+/** Дата и время (для отображения в очереди и подписках). */
+function formatDateTime(date: Date | string | null | undefined): string {
+  if (!date) return '';
+  const d = new Date(date);
+  return d.toLocaleString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+/** Форматирование размера в байтах (принимает number/bigint/string — BigInt из API приходит как строка). */
 function formatBytes(bytes: number | bigint | string | null | undefined): string {
   if (bytes === null || bytes === undefined || bytes === '') return '';
   const b = Number(bytes);
@@ -455,7 +557,7 @@ function formatBytes(bytes: number | bigint | string | null | undefined): string
   return parseFloat((b / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
-// Main Component (использует useSearchParams — должен быть внутри Suspense при SSG)
+// ——— Основной контент страницы (использует useSearchParams — оборачивается в Suspense) ———
 function MediaManagerContent() {
   const { data: session } = useSession();
   const userDisplay = session?.user?.name || session?.user?.email || (session?.user as any)?.username || 'Пользователь';
@@ -469,6 +571,7 @@ function MediaManagerContent() {
     .join('');
   const isAdmin = (session?.user as any)?.isAdmin === true;
 
+  /** Выпадающее меню пользователя: профиль, настройки (админ), админка, выход. */
   const UserMenu = ({ compact, open, onOpenChange }: { compact?: boolean; open?: boolean; onOpenChange?: (open: boolean) => void }) => {
     if (!userId) return null;
     return (
@@ -492,13 +595,18 @@ function MediaManagerContent() {
           <DropdownMenuLabel className="truncate">{userDisplay}</DropdownMenuLabel>
           <DropdownMenuSeparator />
           <DropdownMenuItem asChild>
-            <Link href="/profile">Профиль</Link>
+            <Link href="/profile">
+              <User className="mr-2 h-4 w-4" />
+              Профиль
+            </Link>
           </DropdownMenuItem>
           {(session?.user as any)?.isAdmin && (
             <>
-              <DropdownMenuItem onClick={() => setActiveTab('settings')}>
-                <Settings className="mr-2 h-4 w-4" />
-                Настройки
+              <DropdownMenuItem asChild>
+                <Link href="/settings">
+                  <Settings className="mr-2 h-4 w-4" />
+                  Настройки
+                </Link>
               </DropdownMenuItem>
               <DropdownMenuItem asChild>
                 <Link href="/admin">
@@ -523,25 +631,21 @@ function MediaManagerContent() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const VALID_TABS = ['library', 'subscriptions', 'queue', 'settings'] as const;
+  const tabFromPath = pathname.slice(1); // pathname = /library, /subscriptions, ...
+  const activeTab = (VALID_TABS as readonly string[]).includes(tabFromPath) ? tabFromPath : 'library';
 
-  const [activeTab, setActiveTabState] = useState('library');
-
-  // Восстановление вкладки из URL при загрузке и при навигации назад/вперёд
+  // Невалидный путь — редирект в Медиатеку
   useEffect(() => {
-    const tabFromUrl = searchParams.get('tab');
-    if (tabFromUrl && VALID_TABS.includes(tabFromUrl as any)) {
-      setActiveTabState(tabFromUrl);
+    if (tabFromPath && !(VALID_TABS as readonly string[]).includes(tabFromPath)) {
+      router.replace('/library');
     }
-  }, [searchParams]);
+  }, [tabFromPath, router]);
 
   const setActiveTab = useCallback(
     (id: string) => {
-      setActiveTabState(id);
-      const params = new URLSearchParams(searchParams.toString());
-      params.set('tab', id);
-      router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+      router.push('/' + id);
     },
-    [pathname, router, searchParams]
+    [router]
   );
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -553,12 +657,45 @@ function MediaManagerContent() {
   const isMobile = useIsMobile();
   const isDesktop = !isMobile;
 
-  // Video player state
+  // Состояние видеоплеера (текущее видео, позиция, плавающее окно на desktop)
   const [playingVideo, setPlayingVideo] = useState<VideoType | null>(null);
+  const [playbackQueueContext, setPlaybackQueueContext] = useState<PlaybackQueueContext<VideoType> | null>(null);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [watchPosition, setWatchPosition] = useState(0);
   const [watchPositionLoading, setWatchPositionLoading] = useState(false);
   const lastSavedPositionRef = useRef<{ position: number; completed: boolean } | null>(null);
+  const [videoControlsVisible, setVideoControlsVisible] = useState(true);
+  const [playerChapters, setPlayerChapters] = useState<
+    { startTime: number; endTime: number; title: string }[] | undefined
+  >(undefined);
+  const playingVideoRef = useRef<VideoType | null>(null);
+  playingVideoRef.current = playingVideo;
+
+  /** Открыть видео в контексте очереди воспроизведения (для prev/next). */
+  const openVideoInQueue = useCallback(
+    (video: VideoType, source: PlaybackQueueSource, items: VideoType[], index: number) => {
+      setPlayingVideo(video);
+      setPlaybackQueueContext({ source, items, index });
+    },
+    []
+  );
+
+  const closeVideoPlayer = useCallback(() => {
+    if (isDesktop) saveVideoWindowToStorage(videoWindowRef.current);
+    const last = lastSavedPositionRef.current;
+    const videoId = playingVideoRef.current?.id;
+    if (session?.user && videoId && last) {
+      fetch(`/api/videos/${videoId}/watch`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ position: last.position, completed: last.completed }),
+      }).catch(() => {});
+    }
+    setPlayingVideo(null);
+    setPlaybackQueueContext(null);
+    setStreamError(null);
+    lastSavedPositionRef.current = null;
+  }, [isDesktop, session?.user]);
 
   const [videoWindow, setVideoWindow] = useState<{ x: number; y: number; width: number; height: number }>(() =>
     typeof window === 'undefined' ? { x: 0, y: 0, width: 960, height: 540 } : getDefaultVideoWindow()
@@ -609,6 +746,30 @@ function MediaManagerContent() {
     };
   }, [playingVideo?.id, session?.user]);
 
+  // Загрузка глав из .info.json для разметки полосы прогресса
+  useEffect(() => {
+    if (!playingVideo?.id) {
+      setPlayerChapters(undefined);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/videos/${playingVideo.id}/chapters`)
+      .then((res) => (res.ok ? res.json() : { chapters: [] }))
+      .then((data: { chapters?: { startTime: number; endTime: number; title: string }[] }) => {
+        if (!cancelled && Array.isArray(data.chapters) && data.chapters.length > 0) {
+          setPlayerChapters(data.chapters);
+        } else {
+          setPlayerChapters(undefined);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setPlayerChapters(undefined);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [playingVideo?.id]);
+
   useEffect(() => {
     if (playingVideo && isDesktop) {
       const stored = loadVideoWindowFromStorage();
@@ -616,20 +777,33 @@ function MediaManagerContent() {
     }
   }, [playingVideo, isDesktop]);
 
+  // Мобильный режим: при открытии плеера добавляем запись в history, чтобы кнопка «Назад» закрывала плеер
+  useEffect(() => {
+    if (playingVideo && !isDesktop && typeof window !== 'undefined') {
+      window.history.pushState({ videoPlayerOpen: true }, '', window.location.href);
+    }
+  }, [playingVideo, isDesktop]);
+
+  // Мобильный режим: перехват кнопки «Назад» — закрываем видеоплеер вместо выхода из приложения
+  useEffect(() => {
+    if (isDesktop) return;
+    const onPopState = () => {
+      if (playingVideoRef.current) closeVideoPlayer();
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [isDesktop, closeVideoPlayer]);
+
   useEffect(() => {
     if (activeTab === 'settings' && (session?.user as any)?.isAdmin !== true) {
-      setActiveTabState('library');
-      const params = new URLSearchParams(searchParams.toString());
-      params.set('tab', 'library');
-      router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+      router.replace('/library');
     }
-  }, [activeTab, session?.user, pathname, router, searchParams]);
+  }, [activeTab, session?.user, router]);
 
-  // Deps dialog
+  // Диалоги: зависимости (yt-dlp/ffmpeg), скачивание, подписки, редактирование подписки
   const [depsDialogOpen, setDepsDialogOpen] = useState(false);
-
-  // Download dialog
   const [downloadDialogOpen, setDownloadDialogOpen] = useState(false);
+  const [playlistMenuOpenInPlayer, setPlaylistMenuOpenInPlayer] = useState(false);
   const [downloadUrl, setDownloadUrl] = useState('');
   const [videoInfo, setVideoInfo] = useState<{
     id: string;
@@ -645,50 +819,105 @@ function MediaManagerContent() {
   } | null>(null);
   const [selectedQuality, setSelectedQuality] = useState('best');
   const [isLoadingInfo, setIsLoadingInfo] = useState(false);
-
-  // Subscription dialog
   const [subscriptionDialogOpen, setSubscriptionDialogOpen] = useState(false);
   const [subscriptionUrl, setSubscriptionUrl] = useState('');
   const [subscriptionDays, setSubscriptionDays] = useState(30);
   const [subscriptionQuality, setSubscriptionQuality] = useState('best');
   const [newSubscriptionCategoryId, setNewSubscriptionCategoryId] = useState<string | null>(null);
-
-  // Edit subscription dialog
   const [editSubscriptionId, setEditSubscriptionId] = useState<string | null>(null);
   const [editSubscriptionDays, setEditSubscriptionDays] = useState(30);
   const [editSubscriptionQuality, setEditSubscriptionQuality] = useState('best');
   const [editSubscriptionCategoryId, setEditSubscriptionCategoryId] = useState<string | null>(null);
 
-  // Search
   const [searchQuery, setSearchQuery] = useState('');
-
-  // Library: selected subscription channel (show videos for this channel)
+  // Медиатека: выбранный канал (показ видео канала) и источник открытия (для кнопки «Назад»)
   const [librarySelectedChannelId, setLibrarySelectedChannelId] = useState<string | null>(null);
   const [libraryVideosPage, setLibraryVideosPage] = useState(1);
   // Откуда открыли канал: с вкладки «Подписки» или «Медиатека» — для кнопки «Назад»
   const [libraryOpenedFromTab, setLibraryOpenedFromTab] = useState<'library' | 'subscriptions' | null>(null);
+  // Открытая подборка: категория (ключ categoryId или __none__), плейлист или избранное
+  const [libraryOpenedCategoryKey, setLibraryOpenedCategoryKey] = useState<string | null>(null);
+  const [libraryOpenedPlaylistId, setLibraryOpenedPlaylistId] = useState<string | null>(null);
+  const [libraryOpenedFavorites, setLibraryOpenedFavorites] = useState(false);
 
-  // Сворачивание блоков «Последние скачанные», «Последние просмотренные», «Избранное», «Подписки» (состояние в localStorage)
+  // Восстановление channelId, categoryId, playlistId, favorites, fromTab и поискового запроса из URL при загрузке/навигации
+  useEffect(() => {
+    const channelIdFromUrl = searchParams.get('channelId');
+    const categoryIdFromUrl = searchParams.get('categoryId');
+    const playlistIdFromUrl = searchParams.get('playlistId');
+    const favoritesFromUrl = searchParams.get('favorites');
+    const fromTabFromUrl = searchParams.get('fromTab');
+    const qFromUrl = pathname === '/library' ? (searchParams.get('q') ?? '') : '';
+
+    setSearchQuery(qFromUrl);
+    if (fromTabFromUrl === 'library' || fromTabFromUrl === 'subscriptions') {
+      setLibraryOpenedFromTab(fromTabFromUrl);
+    } else {
+      setLibraryOpenedFromTab(null);
+    }
+    if (channelIdFromUrl) {
+      setLibrarySelectedChannelId(channelIdFromUrl);
+      setLibraryOpenedCategoryKey(null);
+      setLibraryOpenedPlaylistId(null);
+      setLibraryOpenedFavorites(false);
+    } else if (categoryIdFromUrl) {
+      setLibrarySelectedChannelId(null);
+      setLibraryOpenedCategoryKey(categoryIdFromUrl);
+      setLibraryOpenedPlaylistId(null);
+      setLibraryOpenedFavorites(false);
+    } else if (playlistIdFromUrl) {
+      setLibrarySelectedChannelId(null);
+      setLibraryOpenedCategoryKey(null);
+      setLibraryOpenedPlaylistId(playlistIdFromUrl);
+      setLibraryOpenedFavorites(false);
+    } else if (favoritesFromUrl === '1') {
+      setLibrarySelectedChannelId(null);
+      setLibraryOpenedCategoryKey(null);
+      setLibraryOpenedPlaylistId(null);
+      setLibraryOpenedFavorites(true);
+    } else {
+      setLibrarySelectedChannelId(null);
+      setLibraryOpenedCategoryKey(null);
+      setLibraryOpenedPlaylistId(null);
+      setLibraryOpenedFavorites(false);
+    }
+  }, [searchParams, pathname]);
+
+  // Сворачивание секций медиатеки (состояние в localStorage). Аккордеон: только одна группа развёрнута.
   const LIBRARY_SECTIONS_STORAGE_KEY = 'yd-mm-library-sections-collapsed';
+  const LIBRARY_SECTION_KEYS = ['recentPublished', 'recentDownloaded', 'recentWatched', 'favorites', 'librarySubscriptions', 'libraryIndividualVideos', 'libraryPlaylists'] as const;
   const [sectionsCollapsed, setSectionsCollapsed] = useState<Record<string, boolean>>(() => {
-    if (typeof window === 'undefined') return { recentDownloaded: false, recentWatched: false, favorites: false, librarySubscriptions: false };
+    if (typeof window === 'undefined') return { recentPublished: true, recentDownloaded: true, recentWatched: true, favorites: true, librarySubscriptions: true, libraryIndividualVideos: true, libraryPlaylists: true };
     try {
       const raw = localStorage.getItem(LIBRARY_SECTIONS_STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw) as Record<string, boolean>;
         return {
-          recentDownloaded: !!parsed.recentDownloaded,
-          recentWatched: !!parsed.recentWatched,
-          favorites: !!parsed.favorites,
-          librarySubscriptions: !!parsed.librarySubscriptions,
+          recentPublished: parsed.recentPublished !== false,
+          recentDownloaded: parsed.recentDownloaded !== false,
+          recentWatched: parsed.recentWatched !== false,
+          favorites: parsed.favorites !== false,
+          librarySubscriptions: parsed.librarySubscriptions !== false,
+          libraryIndividualVideos: parsed.libraryIndividualVideos !== false,
+          libraryPlaylists: parsed.libraryPlaylists !== false,
         };
       }
     } catch {}
-    return { recentDownloaded: false, recentWatched: false, favorites: false, librarySubscriptions: false };
+    return { recentPublished: true, recentDownloaded: true, recentWatched: true, favorites: true, librarySubscriptions: true, libraryIndividualVideos: true, libraryPlaylists: true };
   });
-  const setSectionCollapsed = useCallback((key: 'recentDownloaded' | 'recentWatched' | 'favorites' | 'librarySubscriptions', collapsed: boolean) => {
+  const setSectionCollapsed = useCallback((key: 'recentPublished' | 'recentDownloaded' | 'recentWatched' | 'favorites' | 'librarySubscriptions' | 'libraryIndividualVideos' | 'libraryPlaylists', collapsed: boolean) => {
+    if (collapsed === false) {
+      setSubscriptionSectionsCollapsed((prev) => {
+        const next = Object.fromEntries(Object.keys(prev).map((k) => [k, true]));
+        try {
+          localStorage.setItem(SUBSCRIPTION_SECTIONS_STORAGE_KEY, JSON.stringify(next));
+        } catch {}
+        return next;
+      });
+    }
     setSectionsCollapsed((prev) => {
-      const next = { ...prev, [key]: collapsed };
+      const allTrue = Object.fromEntries(LIBRARY_SECTION_KEYS.map((k) => [k, true]));
+      const next = collapsed ? { ...prev, [key]: true } : { ...prev, ...allTrue, [key]: false };
       try {
         localStorage.setItem(LIBRARY_SECTIONS_STORAGE_KEY, JSON.stringify(next));
       } catch {}
@@ -696,38 +925,138 @@ function MediaManagerContent() {
     });
   }, []);
 
-  // Delete confirmation
+  // Сворачивание секций подписок по категориям (localStorage)
+  const SUBSCRIPTION_SECTIONS_STORAGE_KEY = 'yd-mm-subscription-sections-collapsed';
+  const [subscriptionSectionsCollapsed, setSubscriptionSectionsCollapsed] = useState<Record<string, boolean>>(() => {
+    if (typeof window === 'undefined') return {};
+    try {
+      const raw = localStorage.getItem(SUBSCRIPTION_SECTIONS_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Record<string, boolean>;
+        return parsed ?? {};
+      }
+    } catch {}
+    return {};
+  });
+  const setSubscriptionSectionCollapsed = useCallback((key: string, collapsed: boolean) => {
+    if (collapsed === false) {
+      setSectionsCollapsed((prev) => {
+        const allTrue = Object.fromEntries(LIBRARY_SECTION_KEYS.map((k) => [k, true]));
+        const next = { ...prev, ...allTrue };
+        try {
+          localStorage.setItem(LIBRARY_SECTIONS_STORAGE_KEY, JSON.stringify(next));
+        } catch {}
+        return next;
+      });
+    }
+    setSubscriptionSectionsCollapsed((prev) => {
+      const next = collapsed
+        ? { ...prev, [key]: true }
+        : { ...Object.fromEntries(Object.keys(prev).map((k) => [k, true])), [key]: false };
+      try {
+        localStorage.setItem(SUBSCRIPTION_SECTIONS_STORAGE_KEY, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  }, []);
+
+  // Плейлисты (БД, только для авторизованных)
+  const [expandedPlaylistId, setExpandedPlaylistId] = useState<string | null>(null);
+  const { data: playlistsData } = useQuery({
+    queryKey: ['playlists'],
+    queryFn: () => api.playlists.list(),
+    enabled: !!session?.user,
+  });
+  const playlists = playlistsData?.playlists ?? [];
+
+  const handleAddVideoToPlaylist = useCallback(
+    async (playlistId: string, videoId: string) => {
+      const pl = playlists.find((p) => p.id === playlistId);
+      if (!pl) return;
+      await api.playlists.update(playlistId, { videoIds: [...pl.videoIds, videoId] });
+      queryClient.invalidateQueries({ queryKey: ['playlists'] });
+      queryClient.invalidateQueries({ queryKey: ['playlist-videos'] });
+      toast.success(`Добавлено в «${pl.name}»`);
+    },
+    [playlists, queryClient]
+  );
+
+  const handleCreatePlaylistAndAddVideo = useCallback(
+    async (videoId: string, name?: string) => {
+      await api.playlists.create(name?.trim() || 'Новый плейлист', [videoId]);
+      queryClient.invalidateQueries({ queryKey: ['playlists'] });
+      queryClient.invalidateQueries({ queryKey: ['playlist-videos'] });
+      toast.success('Плейлист создан, видео добавлено');
+    },
+    [queryClient]
+  );
+
+  // Состояние подтверждений: удаление видео/подписки, очистка видео, удаление старых по дням
   const [deleteVideoId, setDeleteVideoId] = useState<string | null>(null);
   const [deleteSubscriptionId, setDeleteSubscriptionId] = useState<string | null>(null);
   const [clearVideosChannelId, setClearVideosChannelId] = useState<string | 'all' | null>(null);
-
-  // Clean old videos (by days)
   const [cleanOldSubscriptionId, setCleanOldSubscriptionId] = useState<string | null>(null);
   const [cleanOldDays, setCleanOldDays] = useState(30);
 
-  // Сброс страницы при смене подписки или поиска
+  // Сброс номера страницы при смене канала, категории, плейлиста или поискового запроса
   useEffect(() => {
     setLibraryVideosPage(1);
-  }, [librarySelectedChannelId, searchQuery]);
+  }, [librarySelectedChannelId, libraryOpenedCategoryKey, libraryOpenedPlaylistId, libraryOpenedFavorites, searchQuery]);
 
-  // Queries
+  // При входе в содержимое подписки/категории/плейлиста/избранного прокручиваем список видео к началу
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!librarySelectedChannelId && !libraryOpenedCategoryKey && !libraryOpenedPlaylistId && !libraryOpenedFavorites) return;
+    window.scrollTo({ top: 0, behavior: 'auto' });
+  }, [librarySelectedChannelId, libraryOpenedCategoryKey, libraryOpenedPlaylistId, libraryOpenedFavorites]);
+
+  const showLibraryListView =
+    !!librarySelectedChannelId ||
+    !!libraryOpenedCategoryKey ||
+    !!libraryOpenedPlaylistId ||
+    libraryOpenedFavorites ||
+    !!searchQuery;
+
+  // ——— React Query: данные с сервера ———
+  const openedPlaylist = libraryOpenedPlaylistId ? playlists.find((p) => p.id === libraryOpenedPlaylistId) : null;
   const { data: videosData, isLoading: videosLoading } = useQuery({
-    queryKey: ['videos', searchQuery, librarySelectedChannelId, libraryVideosPage],
-    queryFn: () =>
-      api.videos.list({
+    queryKey: ['videos', searchQuery, librarySelectedChannelId, libraryOpenedCategoryKey, libraryOpenedPlaylistId, libraryOpenedFavorites, libraryVideosPage, openedPlaylist?.videoIds?.length ?? 0],
+    queryFn: () => {
+      if (libraryOpenedPlaylistId && openedPlaylist?.videoIds?.length) {
+        return api.videos.list({
+          page: libraryVideosPage,
+          limit: 24,
+          ids: openedPlaylist.videoIds,
+          sort: 'downloadedAt',
+        });
+      }
+      return api.videos.list({
         page: libraryVideosPage,
         limit: 24,
         search: searchQuery,
-        channelId: librarySelectedChannelId || undefined,
-        sort: (librarySelectedChannelId || searchQuery) ? 'publishedAt' : 'downloadedAt',
-      }),
-    enabled: !!librarySelectedChannelId || !!searchQuery,
+        channelId: libraryOpenedFavorites ? '__favorites__' : (librarySelectedChannelId || undefined),
+        categoryId: libraryOpenedCategoryKey || undefined,
+        sort: (librarySelectedChannelId || libraryOpenedCategoryKey || libraryOpenedFavorites || searchQuery) ? 'publishedAt' : 'downloadedAt',
+      });
+    },
+    enabled:
+      !!librarySelectedChannelId ||
+      !!searchQuery ||
+      !!libraryOpenedCategoryKey ||
+      libraryOpenedFavorites ||
+      (!!libraryOpenedPlaylistId && !!openedPlaylist),
   });
 
-  const { data: sectionsData, isLoading: sectionsLoading } = useQuery({
+  const { data: sectionsData, isLoading: sectionsLoading } = useQuery<LibrarySectionsResponse>({
     queryKey: ['videos-sections'],
     queryFn: () => api.videos.sections(),
-    enabled: activeTab === 'library' && !librarySelectedChannelId && !searchQuery,
+    enabled:
+      activeTab === 'library' &&
+      !librarySelectedChannelId &&
+      !libraryOpenedCategoryKey &&
+      !libraryOpenedPlaylistId &&
+      !libraryOpenedFavorites &&
+      !searchQuery,
   });
 
   const { data: queueData, isLoading: queueLoading } = useQuery({
@@ -737,10 +1066,35 @@ function MediaManagerContent() {
     refetchIntervalInBackground: true, // Обновлять очередь даже когда вкладка не активна
   });
 
+  // При завершении загрузки (число активных задач уменьшилось) — обновить списки видео в медиатеке и подписках
+  const prevActiveCountRef = useRef<number | null>(null);
+  useEffect(() => {
+    const active = (queueData as { active?: unknown[] } | undefined)?.active ?? [];
+    const count = active.length;
+    if (prevActiveCountRef.current !== null && count < prevActiveCountRef.current) {
+      queryClient.invalidateQueries({ queryKey: ['videos'] });
+      queryClient.invalidateQueries({ queryKey: ['videos-sections'] });
+      queryClient.invalidateQueries({ queryKey: ['stats'] });
+    }
+    prevActiveCountRef.current = count;
+  }, [queueData, queryClient]);
+
   const { data: subscriptions, isLoading: subscriptionsLoading } = useQuery({
     queryKey: ['subscriptions'],
     queryFn: api.subscriptions.list,
   });
+
+  const libraryRecentLimit = sectionsData?.recentLimit ?? 6;
+  const { data: playlistVideosData } = useQuery({
+    queryKey: ['playlist-videos', expandedPlaylistId, libraryRecentLimit],
+    queryFn: async () => {
+      const pl = playlists.find((p) => p.id === expandedPlaylistId);
+      if (!pl || pl.videoIds.length === 0) return { videos: [] as VideoType[] };
+      return api.videos.byIds(pl.videoIds.slice(0, libraryRecentLimit));
+    },
+    enabled: !!expandedPlaylistId && playlists.some((p) => p.id === expandedPlaylistId),
+  });
+  const playlistVideos = playlistVideosData?.videos ?? [];
 
   const { data: subscriptionCategories } = useQuery({
     queryKey: ['subscription-categories'],
@@ -784,6 +1138,7 @@ function MediaManagerContent() {
   } | null>(null);
   const [settingsDirty, setSettingsDirty] = useState(false);
 
+  // Синхронизация черновика настроек с данными с сервера (пока пользователь не менял)
   useEffect(() => {
     if (settingsDirty) return;
     const s = settings;
@@ -834,7 +1189,7 @@ function MediaManagerContent() {
     queryFn: api.channels.list,
   });
 
-  // Mutations
+  // ——— Мутации: скачивание, подписки, удаление, очередь, избранное, проверка подписок ———
   const downloadMutation = useMutation({
     mutationFn: () =>
       api.download.start(downloadUrl, selectedQuality, 'mp4', videoInfo ? {
@@ -1039,8 +1394,12 @@ function MediaManagerContent() {
 
   const checkSubscriptionsMutation = useMutation({
     mutationFn: api.subscriptions.check,
-    onSuccess: (data) => {
-      toast.success(`Проверено ${data.checked} подписок`);
+    onSuccess: (data: { success?: boolean; aborted?: boolean; checked?: number; results?: unknown[] }) => {
+      if (data.aborted) {
+        toast.info('Проверка прервана');
+      } else {
+        toast.success(`Проверено ${data.checked ?? 0} подписок`);
+      }
       queryClient.invalidateQueries({ queryKey: ['queue'] });
       queryClient.invalidateQueries({ queryKey: ['subscriptions'] });
     },
@@ -1048,9 +1407,13 @@ function MediaManagerContent() {
 
   const checkOneSubscriptionMutation = useMutation({
     mutationFn: (id: string) => api.subscriptions.checkOne(id),
-    onSuccess: (data: { channelName: string; checked: number; newFound: number }) => {
+    onSuccess: (data: { success?: boolean; aborted?: boolean; channelName?: string; checked?: number; newFound?: number }) => {
+      if (data.aborted) {
+        toast.info('Проверка прервана');
+        return;
+      }
       toast.success(
-        data.newFound > 0
+        (data.newFound ?? 0) > 0
           ? `${data.channelName}: найдено ${data.newFound} новых, добавлено в очередь`
           : `${data.channelName}: новых видео нет`
       );
@@ -1060,7 +1423,28 @@ function MediaManagerContent() {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  // Get video info
+  const checkSubscriptionsByCategoryMutation = useMutation({
+    mutationFn: (categoryId: string) => api.subscriptions.checkByCategory(categoryId),
+    onSuccess: (data: { success?: boolean; aborted?: boolean; checked?: number; results?: { newFound?: number; error?: string }[] }) => {
+      if (data.aborted) {
+        toast.info('Проверка прервана');
+        queryClient.invalidateQueries({ queryKey: ['queue'] });
+        queryClient.invalidateQueries({ queryKey: ['subscriptions'] });
+        return;
+      }
+      const totalNew = data.results?.reduce((s, r) => s + (r.newFound ?? 0), 0) ?? 0;
+      toast.success(
+        totalNew > 0
+          ? `Проверено ${data.checked ?? 0} подписок: найдено ${totalNew} новых, добавлено в очередь`
+          : `Проверено ${data.checked ?? 0} подписок: новых видео нет`
+      );
+      queryClient.invalidateQueries({ queryKey: ['queue'] });
+      queryClient.invalidateQueries({ queryKey: ['subscriptions'] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  /** Запрос метаданных по URL перед добавлением в очередь (качество, длительность и т.д.). */
   const handleGetVideoInfo = async () => {
     if (!downloadUrl) return;
     setIsLoadingInfo(true);
@@ -1077,7 +1461,7 @@ function MediaManagerContent() {
     }
   };
 
-  // Navigation items
+  // Пункты бокового меню (мобильное и десктоп)
   const navItems = [
     { id: 'library', label: 'Медиатека', icon: Video },
     { id: 'subscriptions', label: 'Подписки', icon: Rss },
@@ -1095,6 +1479,7 @@ function MediaManagerContent() {
   const stripTicks = (s: string) => s.replace(/`/g, '');
   const stripPrefix = (s: string) => s.replace(/^[^:]+:\s*/, '');
 
+  /** Определение ОС для вывода команд установки yt-dlp/ffmpeg в диалоге зависимостей. */
   const getOsKey = () => {
     if (typeof navigator === 'undefined') return 'windows' as const;
     const ua = navigator.userAgent.toLowerCase();
@@ -1103,6 +1488,7 @@ function MediaManagerContent() {
     return 'linux' as const;
   };
 
+  /** Копирование команд установки недостающих зависимостей в буфер обмена. */
   const copyInstallCommands = async () => {
     if (!deps) return;
 
@@ -1145,136 +1531,9 @@ function MediaManagerContent() {
     }
   };
 
+  // Контент области: вкладки (медиатека, подписки, очередь, настройки) и диалоги. Оболочка (шапка, сайдбар) — в (main)/layout.
   return (
-    <div className="min-h-screen bg-background">
-      {/* Mobile Header */}
-      <header className="lg:hidden fixed top-0 left-0 right-0 h-14 border-b bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60 z-50 flex items-center px-4">
-        <Button variant="ghost" size="icon" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
-          {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-        </Button>
-        <h1 className="ml-2 font-semibold">Media Manager</h1>
-        <div className="ml-auto">
-          <UserMenu compact open={userMenuOpenHeader} onOpenChange={setUserMenuOpenHeader} />
-        </div>
-      </header>
-
-      {/* Mobile Navigation Overlay */}
-      {mobileMenuOpen && (
-        <div className="lg:hidden fixed inset-0 top-14 bg-background z-40 p-4">
-          <nav className="space-y-2">
-            {navItems.map((item) => (
-              <Button
-                key={item.id}
-                variant={activeTab === item.id ? 'secondary' : 'ghost'}
-                className="w-full justify-start"
-                onClick={() => {
-                  if (item.id === 'library') {
-                    setLibrarySelectedChannelId(null);
-                    setLibraryOpenedFromTab(null);
-                  }
-                  setActiveTab(item.id);
-                  setMobileMenuOpen(false);
-                }}
-              >
-                <item.icon className="mr-2 h-4 w-4" />
-                {item.label}
-              </Button>
-            ))}
-          </nav>
-        </div>
-      )}
-
-      {/* Desktop Sidebar */}
-      <aside className={cn(
-        "hidden lg:flex flex-col fixed left-0 top-0 h-full border-r bg-background z-50 transition-all duration-300",
-        sidebarOpen ? "w-64" : "w-16"
-      )}>
-        <div className="p-4 border-b flex items-center justify-between">
-          {sidebarOpen && <h1 className="font-bold text-lg">Media Manager</h1>}
-          <Button variant="ghost" size="icon" onClick={() => setSidebarOpen(!sidebarOpen)}>
-            <FolderOpen className="h-4 w-4" />
-          </Button>
-        </div>
-
-        <nav className="flex-1 p-2 space-y-1">
-          {navItems.map((item) => (
-            <Button
-              key={item.id}
-              variant={activeTab === item.id ? 'secondary' : 'ghost'}
-              className={cn("w-full", sidebarOpen ? "justify-start" : "justify-center")}
-              onClick={() => {
-                if (item.id === 'library') {
-                  setLibrarySelectedChannelId(null);
-                  setLibraryOpenedFromTab(null);
-                }
-                setActiveTab(item.id);
-              }}
-            >
-              <item.icon className={cn("h-4 w-4", sidebarOpen && "mr-2")} />
-              {sidebarOpen && item.label}
-            </Button>
-          ))}
-        </nav>
-
-        {/* Stats */}
-        {sidebarOpen && stats && stats.videos != null && stats.channels != null && (
-          <div className="p-4 border-t space-y-2 text-sm text-muted-foreground">
-            <div className="flex justify-between">
-              <span>Видео:</span>
-              <span className="font-medium text-foreground">{stats.videos?.count ?? '—'}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>Загрузок:</span>
-              <span className="font-medium text-foreground">{(stats as StatsType)?.queue?.active ?? '—'}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>Размер:</span>
-              <span className="font-medium text-foreground">{stats.videos?.totalSizeFormatted ?? '—'}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>Подписки:</span>
-              <span className="font-medium text-foreground">{stats.channels?.subscriptions ?? '—'}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>Обновление:</span>
-              <span className="font-medium text-foreground text-right truncate min-w-0 ml-2">
-                {stats.channels?.lastCheckAt
-                  ? new Date(stats.channels.lastCheckAt).toLocaleString('ru-RU', {
-                      day: '2-digit',
-                      month: '2-digit',
-                      year: '2-digit',
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    }).replace(', ', ' ')
-                  : '—'}
-              </span>
-            </div>
-            {stats.disk && (
-              <div className="flex justify-between">
-                <span>Диск:</span>
-                <span className="font-medium text-foreground">{stats.disk.freeFormatted}</span>
-              </div>
-            )}
-          </div>
-        )}
-
-        <div className={cn('border-t p-3 flex items-center', sidebarOpen ? 'justify-between' : 'justify-center')}>
-          {sidebarOpen ? (
-            <div className="min-w-0">
-              <p className="text-sm font-medium truncate text-foreground">{userDisplay}</p>
-              <p className="text-xs text-muted-foreground truncate">{session?.user?.email || ''}</p>
-            </div>
-          ) : null}
-          <UserMenu open={userMenuOpenSidebar} onOpenChange={setUserMenuOpenSidebar} />
-        </div>
-      </aside>
-
-      {/* Main Content */}
-      <main className={cn(
-        "transition-all duration-300 pt-14 lg:pt-0",
-        sidebarOpen ? "lg:ml-64" : "lg:ml-16"
-      )}>
-        <div className="p-4 lg:p-6">
+    <>
           {depsMissing && (
             <Alert variant="destructive" className="mb-4">
               <AlertTriangle />
@@ -1301,20 +1560,22 @@ function MediaManagerContent() {
             </Alert>
           )}
 
-          {/* Library Tab */}
+          {/* Вкладка «Медиатека»: секции или список видео канала/поиска */}
           {activeTab === 'library' && (
             <div className="space-y-6">
-              <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-center justify-between">
+              <div className="sticky top-0 z-10 -mx-4 px-4 lg:-mx-6 lg:px-6 py-4 -mt-2 surface shadow-elevation-1 mb-6">
+                <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-center justify-between">
                 <div className="flex items-center gap-2 flex-1 min-w-0 w-full sm:w-auto">
-                  {librarySelectedChannelId && (
+                  {(librarySelectedChannelId || libraryOpenedCategoryKey || libraryOpenedPlaylistId || libraryOpenedFavorites) && (
                     <Button
                       variant="ghost"
                       size="sm"
                       onClick={() => {
-                        if (libraryOpenedFromTab === 'subscriptions') {
-                          setActiveTab('subscriptions');
-                        }
+                        router.push(libraryOpenedFromTab === 'subscriptions' ? '/subscriptions' : '/library');
                         setLibrarySelectedChannelId(null);
+                        setLibraryOpenedCategoryKey(null);
+                        setLibraryOpenedPlaylistId(null);
+                        setLibraryOpenedFavorites(false);
                         setSearchQuery('');
                         setLibraryOpenedFromTab(null);
                       }}
@@ -1323,43 +1584,84 @@ function MediaManagerContent() {
                     </Button>
                   )}
                   <div className="relative flex-1 min-w-0 w-full sm:max-w-md">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
                     <Input
                       placeholder="Поиск видео..."
                       value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="pl-9 w-full"
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setSearchQuery(v);
+                        if (pathname === '/library') {
+                          const params = new URLSearchParams(searchParams.toString());
+                          if (v) params.set('q', v);
+                          else params.delete('q');
+                          const query = params.toString();
+                          router.replace(query ? `/library?${query}` : '/library', { scroll: false });
+                        }
+                      }}
+                      className="pl-9 pr-9 w-full"
                     />
+                    {searchQuery && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 text-muted-foreground hover:text-foreground"
+                        onClick={() => router.push('/library')}
+                        title="Очистить"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    )}
                   </div>
                 </div>
-                {librarySelectedChannelId && librarySelectedChannelId !== LIBRARY_INDIVIDUAL_CHANNEL_ID ? (
+                <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 w-full sm:w-auto">
                   <Button
+                    variant="outline"
+                    size="sm"
                     className="w-full sm:w-auto"
-                    onClick={() => {
-                      const sub = subscriptions?.find((s: SubscriptionType) => s.channel.id === librarySelectedChannelId);
-                      if (sub?.id) checkOneSubscriptionMutation.mutate(sub.id);
-                    }}
-                    disabled={checkOneSubscriptionMutation.isPending}
+                    onClick={() => checkSubscriptionsMutation.mutate()}
+                    disabled={checkSubscriptionsMutation.isPending}
                   >
-                    {checkOneSubscriptionMutation.isPending && checkOneSubscriptionMutation.variables === subscriptions?.find((s: SubscriptionType) => s.channel.id === librarySelectedChannelId)?.id ? (
+                    {checkSubscriptionsMutation.isPending ? (
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                     ) : (
                       <RefreshCw className="mr-2 h-4 w-4" />
                     )}
-                    Проверить обновления
+                    Проверить обновление
                   </Button>
-                ) : (
-                  <Button className="w-full sm:w-auto" onClick={() => setDownloadDialogOpen(true)}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full sm:w-auto"
+                    onClick={() => setSubscriptionDialogOpen(true)}
+                  >
+                    <Plus className="mr-2 h-4 w-4" />
+                    Добавить подписку
+                  </Button>
+                  <Button className="w-full sm:w-auto bg-primary hover:bg-primary/90 text-primary-foreground" onClick={() => setDownloadDialogOpen(true)}>
                     <Plus className="mr-2 h-4 w-4" />
                     Скачать видео
                   </Button>
-                )}
+                </div>
+                </div>
               </div>
 
-              {/* View: selected subscription or search */}
-              {(librarySelectedChannelId || searchQuery) && (
+              {/* Режим: выбран канал, категория, плейлист или поиск — показываем список видео с пагинацией */}
+              {showLibraryListView && (
                 <>
-                  {librarySelectedChannelId && (
+                  {libraryOpenedFavorites && (
+                    <h2 className="text-lg font-semibold">Избранное</h2>
+                  )}
+                  {libraryOpenedCategoryKey && !libraryOpenedFavorites && (
+                    <h2 className="text-lg font-semibold">
+                      Категория: {sectionsData?.categorySections?.find((s) => (s.categoryId ?? '__none__') === libraryOpenedCategoryKey)?.name ?? 'Категория'}
+                    </h2>
+                  )}
+                  {libraryOpenedPlaylistId && openedPlaylist && !libraryOpenedFavorites && (
+                    <h2 className="text-lg font-semibold">Плейлист: {openedPlaylist.name}</h2>
+                  )}
+                  {librarySelectedChannelId && !libraryOpenedCategoryKey && !libraryOpenedPlaylistId && !libraryOpenedFavorites && (
                     <>
                       <h2 className="text-lg font-semibold">
                         {librarySelectedChannelId === LIBRARY_INDIVIDUAL_CHANNEL_ID
@@ -1397,13 +1699,29 @@ function MediaManagerContent() {
                                   </p>
                                 </div>
                               </div>
-                              <div className="flex flex-wrap gap-2 text-sm text-muted-foreground">
+                              <div className="flex flex-wrap gap-2 text-sm text-muted-foreground items-center">
                                 <Badge variant="secondary">Дней: {sub.downloadDays}</Badge>
                                 <Badge variant="secondary">Качество: {sub.preferredQuality || 'best'}</Badge>
                                 {sub.category && (
                                   <Badge style={{ backgroundColor: sub.category.backgroundColor }} className="text-primary-foreground border-0">
                                     {sub.category.name}
                                   </Badge>
+                                )}
+                                {sub.channel.platformId && (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    title="Канал в источнике"
+                                    asChild
+                                  >
+                                    <a
+                                      href={`https://www.youtube.com/channel/${sub.channel.platformId}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                    >
+                                      <ExternalLink className="h-4 w-4" />
+                                    </a>
+                                  </Button>
                                 )}
                               </div>
                             </CardContent>
@@ -1427,20 +1745,32 @@ function MediaManagerContent() {
                   ) : videosData?.videos?.length > 0 ? (
                     <>
                       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                        {videosData.videos.map((video: VideoType) => (
+                        {videosData.videos.map((video: VideoType, idx: number) => (
                           <VideoCard
                             key={video.id}
                             video={video as VideoCardVideo}
-                            onPlay={(v) => setPlayingVideo(v as VideoType)}
+                            onPlay={(v) =>
+                              openVideoInQueue(
+                                v as VideoType,
+                                libraryOpenedFavorites
+                                  ? { kind: 'favorites' }
+                                  : librarySelectedChannelId
+                                    ? { kind: 'channel', channelId: librarySelectedChannelId }
+                                    : libraryOpenedCategoryKey != null
+                                      ? { kind: 'subscriptionCategory', categoryId: libraryOpenedCategoryKey === '__none__' ? null : libraryOpenedCategoryKey }
+                                      : libraryOpenedPlaylistId
+                                        ? { kind: 'custom', playlistId: libraryOpenedPlaylistId }
+                                        : { kind: 'library' },
+                                videosData.videos,
+                                idx
+                              )
+                            }
                             onFavorite={session?.user ? (v, isFav) => favoriteMutation.mutate({ id: v.id, isFavorite: isFav }) : undefined}
                             showFavoriteButton={!!session?.user}
-                            onShare={(v) => {
-                              const base = (stats as StatsType)?.baseUrl ?? (typeof window !== 'undefined' ? window.location.origin : '');
-                              navigator.clipboard.writeText(`${base}/watch/${v.id}`).then(
-                                () => toast.success('Ссылка скопирована'),
-                                () => toast.error('Не удалось скопировать')
-                              );
-                            }}
+                            shareBaseUrl={(stats as StatsType)?.baseUrl ?? (typeof window !== 'undefined' ? window.location.origin : '')}
+                            playlists={session?.user ? playlists : undefined}
+                            onAddToPlaylist={session?.user ? handleAddVideoToPlaylist : undefined}
+                            onCreatePlaylistAndAdd={session?.user ? handleCreatePlaylistAndAddVideo : undefined}
                             onDelete={(id) => setDeleteVideoId(id)}
                           />
                         ))}
@@ -1488,18 +1818,82 @@ function MediaManagerContent() {
                       <p className="text-sm text-muted-foreground">
                         {searchQuery
                           ? 'По вашему запросу ничего не найдено'
-                          : librarySelectedChannelId === LIBRARY_INDIVIDUAL_CHANNEL_ID
-                            ? 'Нет отдельных видео. Добавьте видео через кнопку «Скачать видео».'
-                            : 'В этой подписке пока нет скачанных видео'}
+                          : libraryOpenedFavorites
+                            ? 'Пока нет избранного'
+                            : libraryOpenedCategoryKey
+                              ? 'В этой категории пока нет скачанных видео'
+                              : libraryOpenedPlaylistId
+                                ? 'Плейлист пуст'
+                                : librarySelectedChannelId === LIBRARY_INDIVIDUAL_CHANNEL_ID
+                                  ? 'Нет отдельных видео. Добавьте видео через кнопку «Скачать видео».'
+                                  : 'В этой подписке пока нет скачанных видео'}
                       </p>
                     </Card>
                   )}
                 </>
               )}
 
-              {/* View: sections (recent downloaded, recent watched, subscriptions) */}
-              {!librarySelectedChannelId && !searchQuery && (
+              {/* Секции медиатеки: последние опубликованные/скачанные/просмотренные, избранное, подписки по категориям, отдельные видео */}
+              {!showLibraryListView && (
                 <>
+                  {/* Последние опубликованные */}
+                  <section>
+                    <button
+                      type="button"
+                      onClick={() => setSectionCollapsed('recentPublished', !sectionsCollapsed.recentPublished)}
+                      className="flex items-center gap-2 w-full text-left mb-3 group cursor-pointer"
+                    >
+                      {sectionsCollapsed.recentPublished ? (
+                        <ChevronDown className="h-5 w-5 text-muted-foreground shrink-0" />
+                      ) : (
+                        <ChevronUp className="h-5 w-5 text-muted-foreground shrink-0" />
+                      )}
+                      <h2 className="text-lg font-semibold group-hover:opacity-80">Последние опубликованные</h2>
+                    </button>
+                    {!sectionsCollapsed.recentPublished && (
+                      <>
+                        {sectionsLoading ? (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                            {[...Array(6)].map((_, i) => (
+                              <Card key={i} className="overflow-hidden">
+                                <div className="aspect-video bg-muted animate-pulse" />
+                                <CardContent className="p-3">
+                                  <div className="h-4 bg-muted rounded animate-pulse" />
+                                </CardContent>
+                              </Card>
+                            ))}
+                          </div>
+                        ) : (sectionsData?.recentPublished?.length ?? 0) > 0 ? (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                            {(sectionsData?.recentPublished ?? []).map((video: VideoType, idx: number) => (
+                              <VideoCard
+                                key={video.id}
+                                video={video as VideoCardVideo}
+                                onPlay={(v) =>
+                                  openVideoInQueue(v as VideoType, { kind: 'recentPublished' }, sectionsData!.recentPublished, idx)
+                                }
+                                onFavorite={session?.user ? (v, isFav) => favoriteMutation.mutate({ id: v.id, isFavorite: isFav }) : undefined}
+                                showFavoriteButton={!!session?.user}
+                                shareBaseUrl={(stats as StatsType)?.baseUrl ?? (typeof window !== 'undefined' ? window.location.origin : '')}
+                                playlists={session?.user ? playlists : undefined}
+                                onAddToPlaylist={session?.user ? handleAddVideoToPlaylist : undefined}
+                                onCreatePlaylistAndAdd={session?.user ? handleCreatePlaylistAndAddVideo : undefined}
+                                onDelete={(id) => setDeleteVideoId(id)}
+                              />
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-sm text-muted-foreground">Пока нет видео с датой публикации</p>
+                        )}
+                        <div className="mt-4 flex justify-center">
+                          <Button variant="outline" size="sm" className="text-muted-foreground border-border/70" onClick={() => setSectionCollapsed('recentPublished', true)}>
+                            Свернуть
+                          </Button>
+                        </div>
+                      </>
+                    )}
+                  </section>
+
                   {/* Последние скаченные */}
                   <section>
                     <button
@@ -1513,11 +1907,6 @@ function MediaManagerContent() {
                         <ChevronUp className="h-5 w-5 text-muted-foreground shrink-0" />
                       )}
                       <h2 className="text-lg font-semibold group-hover:opacity-80">Последние скаченные</h2>
-                      {sectionsData?.recentDownloaded != null && (
-                        <span className="text-sm text-muted-foreground font-normal">
-                          ({sectionsData.recentDownloaded.length})
-                        </span>
-                      )}
                     </button>
                     {!sectionsCollapsed.recentDownloaded && (
                       <>
@@ -1532,22 +1921,21 @@ function MediaManagerContent() {
                               </Card>
                             ))}
                           </div>
-                        ) : sectionsData?.recentDownloaded?.length > 0 ? (
+                        ) : (sectionsData?.recentDownloaded?.length ?? 0) > 0 ? (
                           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                            {sectionsData.recentDownloaded.map((video: VideoType) => (
+                            {(sectionsData?.recentDownloaded ?? []).map((video: VideoType, idx: number) => (
                               <VideoCard
                                 key={video.id}
                                 video={video as VideoCardVideo}
-                                onPlay={(v) => setPlayingVideo(v as VideoType)}
+                                onPlay={(v) =>
+                                  openVideoInQueue(v as VideoType, { kind: 'recentDownloaded' }, sectionsData!.recentDownloaded, idx)
+                                }
                                 onFavorite={session?.user ? (v, isFav) => favoriteMutation.mutate({ id: v.id, isFavorite: isFav }) : undefined}
                                 showFavoriteButton={!!session?.user}
-                                onShare={(v) => {
-                                  const base = (stats as StatsType)?.baseUrl ?? (typeof window !== 'undefined' ? window.location.origin : '');
-                                  navigator.clipboard.writeText(`${base}/watch/${v.id}`).then(
-                                    () => toast.success('Ссылка скопирована'),
-                                    () => toast.error('Не удалось скопировать')
-                                  );
-                                }}
+                                shareBaseUrl={(stats as StatsType)?.baseUrl ?? (typeof window !== 'undefined' ? window.location.origin : '')}
+                                playlists={session?.user ? playlists : undefined}
+                                onAddToPlaylist={session?.user ? handleAddVideoToPlaylist : undefined}
+                                onCreatePlaylistAndAdd={session?.user ? handleCreatePlaylistAndAddVideo : undefined}
                                 onDelete={(id) => setDeleteVideoId(id)}
                               />
                             ))}
@@ -1555,6 +1943,11 @@ function MediaManagerContent() {
                         ) : (
                           <p className="text-sm text-muted-foreground">Пока нет скачанных видео</p>
                         )}
+                        <div className="mt-4 flex justify-center">
+                          <Button variant="outline" size="sm" className="text-muted-foreground border-border/70" onClick={() => setSectionCollapsed('recentDownloaded', true)}>
+                            Свернуть
+                          </Button>
+                        </div>
                       </>
                     )}
                   </section>
@@ -1572,11 +1965,6 @@ function MediaManagerContent() {
                         <ChevronUp className="h-5 w-5 text-muted-foreground shrink-0" />
                       )}
                       <h2 className="text-lg font-semibold group-hover:opacity-80">Последние просмотренные</h2>
-                      {sectionsData?.recentWatched != null && (
-                        <span className="text-sm text-muted-foreground font-normal">
-                          ({sectionsData.recentWatched.length})
-                        </span>
-                      )}
                     </button>
                     {!sectionsCollapsed.recentWatched && (
                       <>
@@ -1591,22 +1979,21 @@ function MediaManagerContent() {
                               </Card>
                             ))}
                           </div>
-                        ) : sectionsData?.recentWatched?.length > 0 ? (
+                        ) : (sectionsData?.recentWatched?.length ?? 0) > 0 ? (
                           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                            {sectionsData.recentWatched.map((video: VideoType) => (
+                            {(sectionsData?.recentWatched ?? []).map((video: VideoType, idx: number) => (
                               <VideoCard
                                 key={video.id}
                                 video={video as VideoCardVideo}
-                                onPlay={(v) => setPlayingVideo(v as VideoType)}
+                                onPlay={(v) =>
+                                  openVideoInQueue(v as VideoType, { kind: 'recentWatched' }, sectionsData!.recentWatched, idx)
+                                }
                                 onFavorite={session?.user ? (v, isFav) => favoriteMutation.mutate({ id: v.id, isFavorite: isFav }) : undefined}
                                 showFavoriteButton={!!session?.user}
-                                onShare={(v) => {
-                                  const base = (stats as StatsType)?.baseUrl ?? (typeof window !== 'undefined' ? window.location.origin : '');
-                                  navigator.clipboard.writeText(`${base}/watch/${v.id}`).then(
-                                    () => toast.success('Ссылка скопирована'),
-                                    () => toast.error('Не удалось скопировать')
-                                  );
-                                }}
+                                shareBaseUrl={(stats as StatsType)?.baseUrl ?? (typeof window !== 'undefined' ? window.location.origin : '')}
+                                playlists={session?.user ? playlists : undefined}
+                                onAddToPlaylist={session?.user ? handleAddVideoToPlaylist : undefined}
+                                onCreatePlaylistAndAdd={session?.user ? handleCreatePlaylistAndAddVideo : undefined}
                                 onDelete={(id) => setDeleteVideoId(id)}
                               />
                             ))}
@@ -1614,29 +2001,50 @@ function MediaManagerContent() {
                         ) : (
                           <p className="text-sm text-muted-foreground">Пока нет просмотренных видео</p>
                         )}
+                        <div className="mt-4 flex justify-center">
+                          <Button variant="outline" size="sm" className="text-muted-foreground border-border/70" onClick={() => setSectionCollapsed('recentWatched', true)}>
+                            Свернуть
+                          </Button>
+                        </div>
                       </>
                     )}
                   </section>
 
                   {/* Избранное — секция всегда видна, при отсутствии избранного показываем пустое состояние */}
                   <section>
-                    <button
-                      type="button"
-                      onClick={() => setSectionCollapsed('favorites', !sectionsCollapsed.favorites)}
-                      className="flex items-center gap-2 w-full text-left mb-3 group cursor-pointer"
-                    >
-                      {sectionsCollapsed.favorites ? (
-                        <ChevronDown className="h-5 w-5 text-muted-foreground shrink-0" />
-                      ) : (
-                        <ChevronUp className="h-5 w-5 text-muted-foreground shrink-0" />
-                      )}
-                      <h2 className="text-lg font-semibold group-hover:opacity-80">Избранное</h2>
-                      {sectionsData?.favorites != null && (
-                        <span className="text-sm text-muted-foreground font-normal">
-                          ({sectionsData.favorites.length})
-                        </span>
-                      )}
-                    </button>
+                    <div className="flex items-center gap-2 mb-3">
+                      <button
+                        type="button"
+                        onClick={() => setSectionCollapsed('favorites', !sectionsCollapsed.favorites)}
+                        className="flex items-center gap-2 flex-1 min-w-0 text-left group cursor-pointer"
+                      >
+                        {sectionsCollapsed.favorites ? (
+                          <ChevronDown className="h-5 w-5 text-muted-foreground shrink-0" />
+                        ) : (
+                          <ChevronUp className="h-5 w-5 text-muted-foreground shrink-0" />
+                        )}
+                        <h2 className="text-lg font-semibold group-hover:opacity-80">Избранное</h2>
+                      </button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        title="Открыть подборку"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setLibrarySelectedChannelId(null);
+                          setLibraryOpenedCategoryKey(null);
+                          setLibraryOpenedPlaylistId(null);
+                          setSearchQuery('');
+                          setLibraryOpenedFavorites(true);
+                          const params = new URLSearchParams();
+                          params.set('favorites', '1');
+                          router.replace(`/library?${params.toString()}`);
+                        }}
+                      >
+                        <FolderOpen className="h-4 w-4 mr-1" />
+                      </Button>
+                      <span className="w-10" />
+                    </div>
                     {!sectionsCollapsed.favorites && (
                       <>
                         {sectionsLoading ? (
@@ -1650,22 +2058,21 @@ function MediaManagerContent() {
                               </Card>
                             ))}
                           </div>
-                        ) : sectionsData?.favorites?.length > 0 ? (
+                        ) : (sectionsData?.favorites?.length ?? 0) > 0 ? (
                           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                            {sectionsData.favorites.map((video: VideoType) => (
+                            {(sectionsData?.favorites ?? []).map((video: VideoType, idx: number) => (
                               <VideoCard
                                 key={video.id}
                                 video={video as VideoCardVideo}
-                                onPlay={(v) => setPlayingVideo(v as VideoType)}
+                                onPlay={(v) =>
+                                  openVideoInQueue(v as VideoType, { kind: 'favorites' }, sectionsData!.favorites, idx)
+                                }
                                 onFavorite={session?.user ? (v, isFav) => favoriteMutation.mutate({ id: v.id, isFavorite: isFav }) : undefined}
                                 showFavoriteButton={!!session?.user}
-                                onShare={(v) => {
-                                  const base = (stats as StatsType)?.baseUrl ?? (typeof window !== 'undefined' ? window.location.origin : '');
-                                  navigator.clipboard.writeText(`${base}/watch/${v.id}`).then(
-                                    () => toast.success('Ссылка скопирована'),
-                                    () => toast.error('Не удалось скопировать')
-                                  );
-                                }}
+                                shareBaseUrl={(stats as StatsType)?.baseUrl ?? (typeof window !== 'undefined' ? window.location.origin : '')}
+                                playlists={session?.user ? playlists : undefined}
+                                onAddToPlaylist={session?.user ? handleAddVideoToPlaylist : undefined}
+                                onCreatePlaylistAndAdd={session?.user ? handleCreatePlaylistAndAddVideo : undefined}
                                 onDelete={(id) => setDeleteVideoId(id)}
                               />
                             ))}
@@ -1673,155 +2080,292 @@ function MediaManagerContent() {
                         ) : (
                           <p className="text-sm text-muted-foreground">Пока нет избранного</p>
                         )}
+                        <div className="mt-4 flex justify-center">
+                          <Button variant="outline" size="sm" className="text-muted-foreground border-border/70" onClick={() => setSectionCollapsed('favorites', true)}>
+                            Свернуть
+                          </Button>
+                        </div>
                       </>
                     )}
                   </section>
 
-                  {/* Отдельные видео */}
-                  {sectionsData?.individualVideos?.length > 0 && (
+                  {/* Область «Категории»: разделитель и заголовок */}
+                  <div className="mt-8 mb-4 border-t border-border" />
+                  <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-4">Категории</h2>
+
+                  {/* Подписки по категориям */}
+                  {!sectionsLoading && (sectionsData?.categorySections?.length ?? 0) > 0 && (
+                    <div className="space-y-8">
+                      {(sectionsData?.categorySections ?? []).map((section) => {
+                        const key = section.categoryId ?? '__none__';
+                        const collapsed = subscriptionSectionsCollapsed[key] ?? true;
+                        return (
+                          <section key={key}>
+                            <div className="flex items-center gap-3 mb-3">
+                              <button
+                                type="button"
+                                onClick={() => setSubscriptionSectionCollapsed(key, !collapsed)}
+                                className="flex items-center gap-2 flex-1 min-w-0 text-left group cursor-pointer"
+                              >
+                                {collapsed ? (
+                                  <ChevronDown className="h-5 w-5 text-muted-foreground shrink-0" />
+                                ) : (
+                                  <ChevronUp className="h-5 w-5 text-muted-foreground shrink-0" />
+                                )}
+                                <h2 className="text-lg font-semibold group-hover:opacity-80">{section.name}</h2>
+                                <span className="text-sm text-muted-foreground font-normal">
+                                  ({section.subscriptionsCount})
+                                </span>
+                              </button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                title="Открыть подборку"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setLibrarySelectedChannelId(null);
+                                  setLibraryOpenedPlaylistId(null);
+                                  setSearchQuery('');
+                                  setLibraryOpenedCategoryKey(key);
+                                  const params = new URLSearchParams();
+                                  params.set('categoryId', key);
+                                  router.replace(`/library?${params.toString()}`);
+                                }}
+                              >
+                                <FolderOpen className="h-4 w-4 mr-1" />
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                title="Проверить новые"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const keyToCheck = section.categoryId ?? '__none__';
+                                  checkSubscriptionsByCategoryMutation.mutate(keyToCheck);
+                                }}
+                                disabled={checkSubscriptionsByCategoryMutation.isPending}
+                              >
+                                {checkSubscriptionsByCategoryMutation.isPending &&
+                                checkSubscriptionsByCategoryMutation.variables === (section.categoryId ?? '__none__') ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <RefreshCw className="h-4 w-4" />
+                                )}
+                              </Button>
+                            </div>
+                            {!collapsed && (
+                              <>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+                                  {section.videos.map((video: VideoType, idx: number) => (
+                                    <VideoCard
+                                      key={video.id}
+                                      video={video as VideoCardVideo}
+                                      onPlay={(v) =>
+                                        openVideoInQueue(v as VideoType, { kind: 'subscriptionCategory', categoryId: section.categoryId ?? null }, section.videos, idx)
+                                      }
+                                      onFavorite={session?.user ? (v, isFav) => favoriteMutation.mutate({ id: v.id, isFavorite: isFav }) : undefined}
+                                      showFavoriteButton={!!session?.user}
+                                      shareBaseUrl={(stats as StatsType)?.baseUrl ?? (typeof window !== 'undefined' ? window.location.origin : '')}
+                                      playlists={session?.user ? playlists : undefined}
+                                      onAddToPlaylist={session?.user ? handleAddVideoToPlaylist : undefined}
+                                      onCreatePlaylistAndAdd={session?.user ? handleCreatePlaylistAndAddVideo : undefined}
+                                      onDelete={(id) => setDeleteVideoId(id)}
+                                    />
+                                  ))}
+                                </div>
+                                <div className="mt-4 flex justify-center">
+                                  <Button variant="outline" size="sm" className="text-muted-foreground border-border/70" onClick={() => setSubscriptionSectionCollapsed(key, true)}>
+                                    Свернуть
+                                  </Button>
+                                </div>
+                              </>
+                            )}
+                          </section>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Отдельные видео — внизу, с возможностью свернуть/развернуть */}
+                  {(sectionsData?.individualVideos?.length ?? 0) > 0 && (
                     <section>
-                      <h2
-                        className="text-lg font-semibold mb-3 cursor-pointer hover:underline"
-                        onClick={() => {
-                          setLibrarySelectedChannelId(LIBRARY_INDIVIDUAL_CHANNEL_ID);
-                          setLibraryOpenedFromTab('library');
-                        }}
-                        role="button"
-                        tabIndex={0}
-                        onKeyDown={(e) => e.key === 'Enter' && (setLibrarySelectedChannelId(LIBRARY_INDIVIDUAL_CHANNEL_ID), setLibraryOpenedFromTab('library'))}
+                      <button
+                        type="button"
+                        onClick={() => setSectionCollapsed('libraryIndividualVideos', !sectionsCollapsed.libraryIndividualVideos)}
+                        className="flex items-center gap-2 w-full text-left mb-3 group cursor-pointer"
                       >
-                        Отдельные видео
-                      </h2>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                        {sectionsData.individualVideos.map((video: VideoType) => (
-                          <VideoCard
-                            key={video.id}
-video={video as VideoCardVideo}
-                          onPlay={(v) => setPlayingVideo(v as VideoType)}
-                            onFavorite={session?.user ? (v, isFav) => favoriteMutation.mutate({ id: v.id, isFavorite: isFav }) : undefined}
-                            showFavoriteButton={!!session?.user}
-                            onShare={(v) => {
-                              const base = (stats as StatsType)?.baseUrl ?? (typeof window !== 'undefined' ? window.location.origin : '');
-                              navigator.clipboard.writeText(`${base}/watch/${v.id}`).then(
-                                () => toast.success('Ссылка скопирована'),
-                                () => toast.error('Не удалось скопировать')
-                              );
-                            }}
-                            onDelete={(id) => setDeleteVideoId(id)}
-                          />
-                        ))}
-                      </div>
+                        {sectionsCollapsed.libraryIndividualVideos ? (
+                          <ChevronDown className="h-5 w-5 text-muted-foreground shrink-0" />
+                        ) : (
+                          <ChevronUp className="h-5 w-5 text-muted-foreground shrink-0" />
+                        )}
+                        <h2 className="text-lg font-semibold group-hover:opacity-80">Отдельные видео</h2>
+                      </button>
+                      {!sectionsCollapsed.libraryIndividualVideos && (
+                        <>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                            {(sectionsData?.individualVideos ?? []).map((video: VideoType, idx: number) => (
+                              <VideoCard
+                                key={video.id}
+                                video={video as VideoCardVideo}
+                                onPlay={(v) =>
+                                  openVideoInQueue(v as VideoType, { kind: 'individualVideos' }, sectionsData!.individualVideos, idx)
+                                }
+                                onFavorite={session?.user ? (v, isFav) => favoriteMutation.mutate({ id: v.id, isFavorite: isFav }) : undefined}
+                                showFavoriteButton={!!session?.user}
+                                shareBaseUrl={(stats as StatsType)?.baseUrl ?? (typeof window !== 'undefined' ? window.location.origin : '')}
+                                playlists={session?.user ? playlists : undefined}
+                                onAddToPlaylist={session?.user ? handleAddVideoToPlaylist : undefined}
+                                onCreatePlaylistAndAdd={session?.user ? handleCreatePlaylistAndAddVideo : undefined}
+                                onDelete={(id) => setDeleteVideoId(id)}
+                              />
+                            ))}
+                          </div>
+                          <div className="mt-4 flex justify-center">
+                            <Button variant="outline" size="sm" className="text-muted-foreground border-border/70" onClick={() => setSectionCollapsed('libraryIndividualVideos', true)}>
+                              Свернуть
+                            </Button>
+                          </div>
+                        </>
+                      )}
                     </section>
                   )}
 
-                  {/* Подписки */}
-                  <section>
-                    <button
-                      type="button"
-                      onClick={() => setSectionCollapsed('librarySubscriptions', !sectionsCollapsed.librarySubscriptions)}
-                      className="flex items-center gap-2 w-full text-left mb-3 group cursor-pointer"
-                    >
-                      {sectionsCollapsed.librarySubscriptions ? (
-                        <ChevronDown className="h-5 w-5 text-muted-foreground shrink-0" />
+                  {/* Область «Плейлисты»: так же, как «Категории» */}
+                  {session?.user && (
+                    <>
+                      <div className="mt-8 mb-4 border-t border-border" />
+                      <div className="flex justify-between mb-4 items-center">
+                      <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-4">Плейлисты</h2>
+                      <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={async () => {
+                            const name = window.prompt('Название плейлиста', 'Новый плейлист');
+                            if (name != null) {
+                              await api.playlists.create(name, []);
+                              queryClient.invalidateQueries({ queryKey: ['playlists'] });
+                              toast.success('Плейлист создан');
+                            }
+                          }}
+                        >
+                          <Plus className="h-4 w-4 mr-1" />
+                          Создать плейлист
+                        </Button>
+                      </div>
+                      {playlists.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">Нет плейлистов. Создайте плейлист и добавляйте в него видео из меню воспроизведения.</p>
                       ) : (
-                        <ChevronUp className="h-5 w-5 text-muted-foreground shrink-0" />
-                      )}
-                      <h2 className="text-lg font-semibold group-hover:opacity-80">Подписки</h2>
-                      {subscriptions != null && (
-                        <span className="text-sm text-muted-foreground font-normal">
-                          ({(subscriptions?.length ?? 0) + 1})
-                        </span>
-                      )}
-                    </button>
-                    {!sectionsCollapsed.librarySubscriptions && (
-                      <>
-                        {subscriptionsLoading ? (
-                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                            {[...Array(3)].map((_, i) => (
-                              <Card key={i}>
-                                <CardContent className="p-4">
-                                  <div className="h-12 bg-muted rounded animate-pulse" />
-                                </CardContent>
-                              </Card>
-                            ))}
-                          </div>
-                        ) : (
-                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                            {/* Виртуальная карточка «Отдельные видео» */}
-                            <Card
-                              className="overflow-hidden cursor-pointer hover:shadow-lg transition-shadow border-dashed"
-                              onClick={() => {
-                                setLibrarySelectedChannelId(LIBRARY_INDIVIDUAL_CHANNEL_ID);
-                                setLibraryOpenedFromTab('library');
-                              }}
-                            >
-                              <CardContent className="p-4 flex items-center gap-3">
-                                <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center">
-                                  <Download className="h-6 w-6 text-muted-foreground" />
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <h3 className="font-medium truncate">Отдельные видео</h3>
-                                  <p className="text-sm text-muted-foreground">
-                                    {sectionsData?.individualVideos?.length ?? 0} видео
-                                  </p>
-                                </div>
-                                <ChevronDown className="h-4 w-4 text-muted-foreground -rotate-90" />
-                              </CardContent>
-                            </Card>
-                            {subscriptions?.map((sub: SubscriptionType) => {
-                              const gradient = sub.category?.backgroundColor
-                                ? getOmbreGradient(sub.category.backgroundColor)
-                                : null;
-                              return (
-                              <Card
-                                key={sub.id}
-                                className="overflow-hidden cursor-pointer hover:shadow-lg transition-shadow"
-                                style={gradient ? { background: `linear-gradient(0deg, ${gradient.from}, ${gradient.to})` } : undefined}
-                                onClick={() => {
-                                  setLibrarySelectedChannelId(sub.channel.id);
-                                  setLibraryOpenedFromTab('library');
-                                }}
-                              >
-                                <CardContent className="p-4 flex items-center gap-3">
-                                  {avatarFallback[sub.channel.id] && !sub.channel.avatarUrl ? (
-                                    <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center">
-                                      <Youtube className="h-6 w-6" />
-                                    </div>
+                        <div className="space-y-8">
+                          {playlists.map((pl) => (
+                            <section key={pl.id}>
+                              <div className="flex items-center gap-3 mb-3">
+                                <button
+                                  type="button"
+                                  onClick={() => setExpandedPlaylistId(expandedPlaylistId === pl.id ? null : pl.id)}
+                                  className="flex items-center gap-2 flex-1 min-w-0 text-left group cursor-pointer"
+                                >
+                                  {expandedPlaylistId === pl.id ? (
+                                    <ChevronUp className="h-5 w-5 text-muted-foreground shrink-0" />
                                   ) : (
-                                    <img
-                                      src={avatarFallback[sub.channel.id] ? (sub.channel.avatarUrl ?? '') : `/api/channel-avatar/${sub.channel.id}`}
-                                      alt={sub.channel.name}
-                                      className="w-12 h-12 rounded-full"
-                                      onError={() => setAvatarFallback((prev) => ({ ...prev, [sub.channel.id]: true }))}
-                                    />
+                                    <ChevronDown className="h-5 w-5 text-muted-foreground shrink-0" />
                                   )}
-                                  <div className="flex-1 min-w-0">
-                                    <h3 className="font-medium truncate">{sub.channel.name}</h3>
-                                    <p className="text-sm text-muted-foreground">
-                                      {sub.channel._count?.videos || 0} видео
-                                    </p>
+                                  <h2 className="text-lg font-semibold group-hover:opacity-80 truncate">{pl.name}</h2>
+                                  <span className="text-sm text-muted-foreground font-normal shrink-0">
+                                    ({pl.videoIds.length})
+                                  </span>
+                                </button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  title="Открыть подборку"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setLibrarySelectedChannelId(null);
+                                    setLibraryOpenedCategoryKey(null);
+                                    setSearchQuery('');
+                                    setLibraryOpenedPlaylistId(pl.id);
+                                    const params = new URLSearchParams();
+                                    params.set('playlistId', pl.id);
+                                    router.replace(`/library?${params.toString()}`);
+                                  }}
+                                >
+                                  <FolderOpen className="h-4 w-4 mr-1" />
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="shrink-0 text-destructive hover:text-destructive"
+                                  title="Удалить плейлист"
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    if (window.confirm(`Удалить плейлист «${pl.name}»?`)) {
+                                      await api.playlists.delete(pl.id);
+                                      queryClient.invalidateQueries({ queryKey: ['playlists'] });
+                                      if (expandedPlaylistId === pl.id) setExpandedPlaylistId(null);
+                                      toast.success('Плейлист удалён');
+                                    }
+                                  }}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                              {expandedPlaylistId === pl.id && (
+                                <>
+                                  {pl.videoIds.length === 0 ? (
+                                    <p className="text-sm text-muted-foreground">Плейлист пуст. Добавьте видео через кнопку «Добавить в плейлист» в плеере.</p>
+                                  ) : (
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+                                      {playlistVideos.length === 0 ? (
+                                        <div className="flex items-center gap-2 text-muted-foreground">
+                                          <Loader2 className="h-5 w-5 animate-spin" />
+                                          <span className="text-sm">Загрузка...</span>
+                                        </div>
+                                      ) : (
+                                        playlistVideos.map((video: VideoType, idx: number) => (
+                                          <VideoCard
+                                            key={video.id}
+                                            video={video as VideoCardVideo}
+                                            onPlay={(v) =>
+                                              openVideoInQueue(v as VideoType, { kind: 'custom', playlistId: pl.id }, playlistVideos, idx)
+                                            }
+                                            onFavorite={session?.user ? (v, isFav) => favoriteMutation.mutate({ id: v.id, isFavorite: isFav }) : undefined}
+                                            showFavoriteButton={!!session?.user}
+                                            shareBaseUrl={(stats as StatsType)?.baseUrl ?? (typeof window !== 'undefined' ? window.location.origin : '')}
+                                            playlists={session?.user ? playlists : undefined}
+                                            onAddToPlaylist={session?.user ? handleAddVideoToPlaylist : undefined}
+                                            onCreatePlaylistAndAdd={session?.user ? handleCreatePlaylistAndAddVideo : undefined}
+                                            onDelete={(id) => setDeleteVideoId(id)}
+                                          />
+                                        ))
+                                      )}
+                                    </div>
+                                  )}
+                                  <div className="mt-4 flex justify-center">
+                                    <Button variant="outline" size="sm" className="text-muted-foreground border-border/70" onClick={() => setExpandedPlaylistId(null)}>
+                                      Свернуть
+                                    </Button>
                                   </div>
-                                  <ChevronDown className="h-4 w-4 text-muted-foreground -rotate-90" />
-                                </CardContent>
-                              </Card>
-                            );
-                            })}
-                          </div>
-                        )}
+                                </>
+                              )}
+                            </section>
+                          ))}
+                        </div>
+                      )}
                       </>
                     )}
-                  </section>
                 </>
               )}
             </div>
           )}
 
-          {/* Subscriptions Tab */}
+          {/* Вкладка «Подписки»: категории, каналы, проверка обновлений */}
           {activeTab === 'subscriptions' && (
-            <div className="space-y-4">
-              <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-center justify-between">
-                <h2 className="text-xl font-semibold">Подписки</h2>
-                <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+            <div className="space-y-6">
+              <div className="sticky top-0 z-10 -mx-4 px-4 lg:-mx-6 lg:px-6 py-4 -mt-2 surface shadow-elevation-1 mb-6">
+                <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-center justify-between">
+                  <h2 className="text-2xl font-medium tracking-tight text-foreground">Подписки</h2>
+                  <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
                   <Button
                     variant="outline"
                     className="w-full sm:w-auto"
@@ -1835,10 +2379,11 @@ video={video as VideoCardVideo}
                     )}
                     Проверить новые
                   </Button>
-                  <Button className="w-full sm:w-auto" onClick={() => setSubscriptionDialogOpen(true)}>
+                  <Button className="w-full sm:w-auto bg-primary hover:bg-primary/90 text-primary-foreground" onClick={() => setSubscriptionDialogOpen(true)}>
                     <Plus className="mr-2 h-4 w-4" />
                     Добавить подписку
                   </Button>
+                  </div>
                 </div>
               </div>
 
@@ -1853,115 +2398,365 @@ video={video as VideoCardVideo}
                   ))}
                 </div>
               ) : subscriptions?.length > 0 ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {subscriptions.map((sub: SubscriptionType) => {
-                    const gradient = sub.category?.backgroundColor
-                      ? getOmbreGradient(sub.category.backgroundColor)
-                      : null;
+                (() => {
+                  const UNCATEGORIZED_KEY = '__none__';
+                  const subsList = subscriptions as SubscriptionType[];
+                  if ((subscriptionCategories?.length ?? 0) === 0) {
                     return (
-                    <Card
-                      key={sub.id}
-                      className="cursor-pointer hover:bg-muted/50 transition-colors"
-                      style={gradient ? { background: `linear-gradient(0deg, ${gradient.from}, ${gradient.to})` } : undefined}
-                      onClick={() => {
-                        setLibrarySelectedChannelId(sub.channel.id);
-                        setActiveTab('library');
-                        setLibraryOpenedFromTab('subscriptions');
-                      }}
-                    >
-                      <CardHeader className="pb-2">
-                        <div className="flex items-center gap-3">
-                          {avatarFallback[sub.channel.id] && !sub.channel.avatarUrl ? (
-                            <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center">
-                              <Youtube className="h-5 w-5" />
-                            </div>
-                          ) : (
-                            <img
-                              src={avatarFallback[sub.channel.id] ? (sub.channel.avatarUrl ?? '') : `/api/channel-avatar/${sub.channel.id}`}
-                              alt={sub.channel.name}
-                              className="w-10 h-10 rounded-full"
-                              onError={() => setAvatarFallback((prev) => ({ ...prev, [sub.channel.id]: true }))}
-                            />
-                          )}
-                          <div className="min-w-0 flex-1">
-                            <CardTitle className="text-base truncate">{sub.channel.name}</CardTitle>
-                            <CardDescription>
-                              {sub.channel._count?.videos || 0} видео
-                            </CardDescription>
+                      <div className="space-y-6">
+                        <section>
+                          <div className="flex items-center gap-2 mb-3">
+                            <button
+                              type="button"
+                              onClick={() => setSubscriptionSectionCollapsed(UNCATEGORIZED_KEY, !(subscriptionSectionsCollapsed[UNCATEGORIZED_KEY] ?? true))}
+                              className="flex items-center gap-2 flex-1 min-w-0 text-left group cursor-pointer"
+                            >
+                              {(subscriptionSectionsCollapsed[UNCATEGORIZED_KEY] ?? true) ? (
+                                <ChevronDown className="h-5 w-5 text-muted-foreground shrink-0" />
+                              ) : (
+                                <ChevronUp className="h-5 w-5 text-muted-foreground shrink-0" />
+                              )}
+                              <h3 className="text-lg font-semibold group-hover:opacity-80">Без категории</h3>
+                              <span className="text-sm text-muted-foreground font-normal">({subsList.length})</span>
+                            </button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              title="Проверить новые"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                checkSubscriptionsByCategoryMutation.mutate(UNCATEGORIZED_KEY);
+                              }}
+                              disabled={checkSubscriptionsByCategoryMutation.isPending}
+                            >
+                              {checkSubscriptionsByCategoryMutation.isPending && checkSubscriptionsByCategoryMutation.variables === UNCATEGORIZED_KEY ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <RefreshCw className="h-4 w-4" />
+                              )}
+                            </Button>
                           </div>
-                        </div>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                          <Badge variant="outline">
-                            <Clock className="mr-1 h-3 w-3" />
-                            {sub.downloadDays} дней
-                          </Badge>
-                          {sub.preferredQuality && (
-                            <Badge variant="outline">{sub.preferredQuality}</Badge>
+                          {!(subscriptionSectionsCollapsed[UNCATEGORIZED_KEY] ?? true) && (
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                              {subsList.map((sub: SubscriptionType) => {
+                                const gradient = sub.category?.backgroundColor
+                                  ? getOmbreGradient(sub.category.backgroundColor)
+                                  : null;
+                                return (
+                                  <Card
+                                    key={sub.id}
+                                    className="cursor-pointer hover:bg-muted/50 transition-colors"
+                                    style={gradient ? { background: `linear-gradient(0deg, ${gradient.from}, ${gradient.to})` } : undefined}
+                                    onClick={() => {
+                                      router.push(`/library?channelId=${sub.channel.id}&fromTab=subscriptions`);
+                                      setLibrarySelectedChannelId(sub.channel.id);
+                                      setLibraryOpenedFromTab('subscriptions');
+                                    }}
+                                  >
+                                    <CardHeader className="pb-2">
+                                      <div className="flex items-center gap-3">
+                                        {avatarFallback[sub.channel.id] && !sub.channel.avatarUrl ? (
+                                          <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center">
+                                            <Youtube className="h-5 w-5" />
+                                          </div>
+                                        ) : (
+                                          <img
+                                            src={avatarFallback[sub.channel.id] ? (sub.channel.avatarUrl ?? '') : `/api/channel-avatar/${sub.channel.id}`}
+                                            alt={sub.channel.name}
+                                            className="w-10 h-10 rounded-full"
+                                            onError={() => setAvatarFallback((prev) => ({ ...prev, [sub.channel.id]: true }))}
+                                          />
+                                        )}
+                                        <div className="min-w-0 flex-1">
+                                          <CardTitle className="text-base truncate">{sub.channel.name}</CardTitle>
+                                          <CardDescription>
+                                            {sub.channel._count?.videos || 0} видео
+                                          </CardDescription>
+                                        </div>
+                                      </div>
+                                    </CardHeader>
+                                    <CardContent>
+                                      <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                                        <Badge variant="outline">
+                                          <Clock className="mr-1 h-3 w-3" />
+                                          {sub.downloadDays} дней
+                                        </Badge>
+                                        {sub.preferredQuality && (
+                                          <Badge variant="outline">{sub.preferredQuality}</Badge>
+                                        )}
+                                        <Badge variant={sub.isActive ? 'default' : 'secondary'}>
+                                          {sub.isActive ? 'Активна' : 'Пауза'}
+                                        </Badge>
+                                      </div>
+                                    </CardContent>
+                                    <CardFooter className="pt-2 flex gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
+                                      {sub.channel.platformId && (
+                                        <Button
+                                          size="sm"
+                                          variant="ghost"
+                                          title="Канал в источнике"
+                                          asChild
+                                        >
+                                          <a
+                                            href={`https://www.youtube.com/channel/${sub.channel.platformId}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            onClick={(e) => e.stopPropagation()}
+                                          >
+                                            <ExternalLink className="h-4 w-4" />
+                                          </a>
+                                        </Button>
+                                      )}
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        title="Проверить на новые видео"
+                                        onClick={() => checkOneSubscriptionMutation.mutate(sub.id)}
+                                        disabled={checkOneSubscriptionMutation.isPending && checkOneSubscriptionMutation.variables === sub.id}
+                                      >
+                                        {checkOneSubscriptionMutation.isPending && checkOneSubscriptionMutation.variables === sub.id ? (
+                                          <Loader2 className="h-4 w-4 animate-spin" />
+                                        ) : (
+                                          <RefreshCw className="h-4 w-4" />
+                                        )}
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        title="Очистить скаченные видео канала"
+                                        onClick={() => setClearVideosChannelId(sub.channel.id)}
+                                      >
+                                        <FolderMinus className="h-4 w-4" />
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        title="Удалить старые видео"
+                                        onClick={() => {
+                                          setCleanOldSubscriptionId(sub.id);
+                                          setCleanOldDays(30);
+                                        }}
+                                      >
+                                        <CalendarClock className="h-4 w-4" />
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        onClick={() => {
+                                          setEditSubscriptionId(sub.id);
+                                          setEditSubscriptionDays(sub.downloadDays);
+                                          setEditSubscriptionQuality(sub.preferredQuality || 'best');
+                                          setEditSubscriptionCategoryId(sub.categoryId ?? null);
+                                        }}
+                                      >
+                                        <Pencil className="h-4 w-4" />
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        onClick={() => setDeleteSubscriptionId(sub.id)}
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                      </Button>
+                                    </CardFooter>
+                                  </Card>
+                                );
+                              })}
+                            </div>
                           )}
-                          <Badge variant={sub.isActive ? 'default' : 'secondary'}>
-                            {sub.isActive ? 'Активна' : 'Пауза'}
-                          </Badge>
-                        </div>
-                      </CardContent>
-                      <CardFooter className="pt-2 flex gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          title="Проверить на новые видео"
-                          onClick={() => checkOneSubscriptionMutation.mutate(sub.id)}
-                          disabled={checkOneSubscriptionMutation.isPending && checkOneSubscriptionMutation.variables === sub.id}
-                        >
-                          {checkOneSubscriptionMutation.isPending && checkOneSubscriptionMutation.variables === sub.id ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <RefreshCw className="h-4 w-4" />
-                          )}
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          title="Очистить скаченные видео канала"
-                          onClick={() => setClearVideosChannelId(sub.channel.id)}
-                        >
-                          <FolderMinus className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          title="Удалить старые видео"
-                          onClick={() => {
-                            setCleanOldSubscriptionId(sub.id);
-                            setCleanOldDays(30);
-                          }}
-                        >
-                          <CalendarClock className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => {
-                            setEditSubscriptionId(sub.id);
-                            setEditSubscriptionDays(sub.downloadDays);
-                            setEditSubscriptionQuality(sub.preferredQuality || 'best');
-                            setEditSubscriptionCategoryId(sub.categoryId ?? null);
-                          }}
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => setDeleteSubscriptionId(sub.id)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </CardFooter>
-                    </Card>
+                        </section>
+                      </div>
+                    );
+                  }
+                  const byCategory = new Map<string | null, SubscriptionType[]>();
+                  for (const sub of subsList) {
+                    const key = sub.categoryId ?? null;
+                    const arr = byCategory.get(key) ?? [];
+                    arr.push(sub);
+                    byCategory.set(key, arr);
+                  }
+                  const sections: { key: string; label: string; subs: SubscriptionType[] }[] = [];
+                  for (const cat of subscriptionCategories!) {
+                    const subs = byCategory.get(cat.id) ?? [];
+                    if (subs.length > 0) {
+                      sections.push({ key: cat.id, label: cat.name, subs });
+                    }
+                  }
+                  const uncategorized = byCategory.get(null) ?? [];
+                  if (uncategorized.length > 0) {
+                    sections.push({ key: UNCATEGORIZED_KEY, label: 'Без категории', subs: uncategorized });
+                  }
+                  return (
+                    <div className="space-y-6">
+                      {sections.map(({ key, label, subs }) => {
+                        const collapsed = subscriptionSectionsCollapsed[key] ?? true;
+                        return (
+                          <section key={key}>
+                            <div className="flex items-center gap-2 mb-3">
+                              <button
+                                type="button"
+                                onClick={() => setSubscriptionSectionCollapsed(key, !collapsed)}
+                                className="flex items-center gap-2 flex-1 min-w-0 text-left group cursor-pointer"
+                              >
+                                {collapsed ? (
+                                  <ChevronDown className="h-5 w-5 text-muted-foreground shrink-0" />
+                                ) : (
+                                  <ChevronUp className="h-5 w-5 text-muted-foreground shrink-0" />
+                                )}
+                                <h3 className="text-lg font-semibold group-hover:opacity-80">{label}</h3>
+                                <span className="text-sm text-muted-foreground font-normal">({subs.length})</span>
+                              </button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                title="Проверить новые"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  checkSubscriptionsByCategoryMutation.mutate(key);
+                                }}
+                                disabled={checkSubscriptionsByCategoryMutation.isPending}
+                              >
+                                {checkSubscriptionsByCategoryMutation.isPending && checkSubscriptionsByCategoryMutation.variables === key ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <RefreshCw className="h-4 w-4" />
+                                )}
+                              </Button>
+                            </div>
+                            {!collapsed && (
+                              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                {subs.map((sub: SubscriptionType) => {
+                                  const gradient = sub.category?.backgroundColor
+                                    ? getOmbreGradient(sub.category.backgroundColor)
+                                    : null;
+                                  return (
+                                    <Card
+                                      key={sub.id}
+                                      className="cursor-pointer hover:bg-muted/50 transition-colors"
+                                      style={gradient ? { background: `linear-gradient(0deg, ${gradient.from}, ${gradient.to})` } : undefined}
+                                      onClick={() => {
+                                        router.push(`/library?channelId=${sub.channel.id}&fromTab=subscriptions`);
+                                        setLibrarySelectedChannelId(sub.channel.id);
+                                        setLibraryOpenedFromTab('subscriptions');
+                                      }}
+                                    >
+                                      <CardHeader className="pb-2">
+                                        <div className="flex items-center gap-3">
+                                          {avatarFallback[sub.channel.id] && !sub.channel.avatarUrl ? (
+                                            <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center">
+                                              <Youtube className="h-5 w-5" />
+                                            </div>
+                                          ) : (
+                                            <img
+                                              src={avatarFallback[sub.channel.id] ? (sub.channel.avatarUrl ?? '') : `/api/channel-avatar/${sub.channel.id}`}
+                                              alt={sub.channel.name}
+                                              className="w-10 h-10 rounded-full"
+                                              onError={() => setAvatarFallback((prev) => ({ ...prev, [sub.channel.id]: true }))}
+                                            />
+                                          )}
+                                          <div className="min-w-0 flex-1">
+                                            <CardTitle className="text-base truncate">{sub.channel.name}</CardTitle>
+                                            <CardDescription>
+                                              {sub.channel._count?.videos || 0} видео
+                                            </CardDescription>
+                                          </div>
+                                        </div>
+                                      </CardHeader>
+                                      <CardContent>
+                                        <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                                          <Badge variant="outline">
+                                            <Clock className="mr-1 h-3 w-3" />
+                                            {sub.downloadDays} дней
+                                          </Badge>
+                                          {sub.preferredQuality && (
+                                            <Badge variant="outline">{sub.preferredQuality}</Badge>
+                                          )}
+                                          <Badge variant={sub.isActive ? 'default' : 'secondary'}>
+                                            {sub.isActive ? 'Активна' : 'Пауза'}
+                                          </Badge>
+                                        </div>
+                                      </CardContent>
+                                      <CardFooter className="pt-2 flex gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
+                                        {sub.channel.platformId && (
+                                          <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            title="Канал в источнике"
+                                            asChild
+                                          >
+                                            <a
+                                              href={`https://www.youtube.com/channel/${sub.channel.platformId}`}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              onClick={(e) => e.stopPropagation()}
+                                            >
+                                              <ExternalLink className="h-4 w-4" />
+                                            </a>
+                                          </Button>
+                                        )}
+                                        <Button
+                                          size="sm"
+                                          variant="ghost"
+                                          title="Проверить на новые видео"
+                                          onClick={() => checkOneSubscriptionMutation.mutate(sub.id)}
+                                          disabled={checkOneSubscriptionMutation.isPending && checkOneSubscriptionMutation.variables === sub.id}
+                                        >
+                                          {checkOneSubscriptionMutation.isPending && checkOneSubscriptionMutation.variables === sub.id ? (
+                                            <Loader2 className="h-4 w-4 animate-spin" />
+                                          ) : (
+                                            <RefreshCw className="h-4 w-4" />
+                                          )}
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="ghost"
+                                          title="Очистить скаченные видео канала"
+                                          onClick={() => setClearVideosChannelId(sub.channel.id)}
+                                        >
+                                          <FolderMinus className="h-4 w-4" />
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="ghost"
+                                          title="Удалить старые видео"
+                                          onClick={() => {
+                                            setCleanOldSubscriptionId(sub.id);
+                                            setCleanOldDays(30);
+                                          }}
+                                        >
+                                          <CalendarClock className="h-4 w-4" />
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="ghost"
+                                          onClick={() => {
+                                            setEditSubscriptionId(sub.id);
+                                            setEditSubscriptionDays(sub.downloadDays);
+                                            setEditSubscriptionQuality(sub.preferredQuality || 'best');
+                                            setEditSubscriptionCategoryId(sub.categoryId ?? null);
+                                          }}
+                                        >
+                                          <Pencil className="h-4 w-4" />
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="ghost"
+                                          onClick={() => setDeleteSubscriptionId(sub.id)}
+                                        >
+                                          <Trash2 className="h-4 w-4" />
+                                        </Button>
+                                      </CardFooter>
+                                    </Card>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </section>
+                        );
+                      })}
+                    </div>
                   );
-                  })}
-                </div>
+                })()
               ) : (
                 <Card className="p-8 text-center">
                   <Rss className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
@@ -1978,12 +2773,13 @@ video={video as VideoCardVideo}
             </div>
           )}
 
-          {/* Queue Tab */}
+          {/* Вкладка «Очередь»: активные и недавние задачи загрузки */}
           {activeTab === 'queue' && (
-            <div className="space-y-4">
-              <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-center justify-between">
-                <h2 className="text-xl font-semibold">Очередь загрузок ({(queueData?.active?.length ?? 0)})</h2>
-                <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 w-full sm:w-auto">
+            <div className="space-y-6">
+              <div className="sticky top-0 z-10 -mx-4 px-4 lg:-mx-6 lg:px-6 py-4 -mt-2 surface shadow-elevation-1 mb-6">
+                <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-center justify-between">
+                  <h2 className="text-2xl font-medium tracking-tight text-foreground">Очередь загрузок ({(queueData?.active?.length ?? 0)})</h2>
+                  <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 w-full sm:w-auto">
                   {isAdmin && (
                     <>
                       <Button
@@ -2003,32 +2799,48 @@ video={video as VideoCardVideo}
                         variant="outline"
                         size="sm"
                         className="w-full sm:w-auto"
-                        onClick={() => queueClearMutation.mutate()}
-                        disabled={queueClearMutation.isPending || (!queueData?.active?.length && !queueData?.recent?.length)}
-                      >
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Очистить очередь
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="w-full sm:w-auto"
                         onClick={() => retryFailedAllMutation.mutate()}
                         disabled={retryFailedAllMutation.isPending || !queueData?.recent?.some((t: DownloadTaskType) => t.status === 'failed')}
                       >
                         {retryFailedAllMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
                         Повторить ошибки
                       </Button>
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="w-full sm:w-auto"
+                            disabled={queueClearMutation.isPending || (!queueData?.active?.length && !queueData?.recent?.length)}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Очистить очередь
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Очистить очередь загрузок?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              Будут удалены все активные и завершённые задачи в очереди. Это действие нельзя отменить.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Отмена</AlertDialogCancel>
+                            <AlertDialogAction
+                              onClick={() => queueClearMutation.mutate()}
+                            >
+                              Да, очистить
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
                     </>
                   )}
-                  <Button className="w-full sm:w-auto" onClick={() => setDownloadDialogOpen(true)}>
-                    <Plus className="mr-2 h-4 w-4" />
-                    Добавить загрузку
-                  </Button>
+                  </div>
                 </div>
               </div>
 
-              {/* Active Tasks */}
+              {/* Активные задачи очереди (пауза/возобновить/отменить) */}
               {queueData?.active?.length > 0 && (
                 <div className="space-y-2">
                   <h3 className="font-medium text-muted-foreground">Активные</h3>
@@ -2037,10 +2849,27 @@ video={video as VideoCardVideo}
                       <CardContent className="p-4">
                         <div className="flex items-start justify-between gap-4">
                           <div className="flex-1 min-w-0">
-                            <p className="font-medium truncate">{task.title || task.video?.title || task.url}</p>
+                            {task.url ? (
+                              <a
+                                href={task.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="font-medium truncate hover:underline text-primary block"
+                              >
+                                {task.title || task.video?.title || task.url}
+                              </a>
+                            ) : (
+                              <p className="font-medium truncate">{task.title || task.video?.title || task.url}</p>
+                            )}
                             {(task.video?.channel?.name || task.video?.publishedAt) && (
                               <p className="text-xs text-muted-foreground mt-1">
-                                {task.video.channel?.name}
+                                {task.video.channel?.id && subscriptions?.some((s: SubscriptionType) => s.channel.id === task.video?.channel?.id) ? (
+                                  <Link href={`/library?channelId=${task.video.channel.id}`} className="hover:underline text-primary">
+                                    {task.video.channel.name}
+                                  </Link>
+                                ) : (
+                                  task.video.channel?.name
+                                )}
                                 {task.video.channel?.name && task.video.publishedAt && ' · '}
                                 {task.video.publishedAt && `Опубликовано: ${formatDate(task.video.publishedAt)}`}
                               </p>
@@ -2109,7 +2938,7 @@ video={video as VideoCardVideo}
                 </div>
               )}
 
-              {/* Recent Tasks */}
+              {/* Недавние/завершённые задачи (повтор, отмена) */}
               {queueData?.recent?.length > 0 && (
                 <div className="space-y-2">
                   <h3 className="font-medium text-muted-foreground">Недавние</h3>
@@ -2118,10 +2947,27 @@ video={video as VideoCardVideo}
                       <CardContent className="p-4">
                         <div className="flex items-start justify-between gap-4">
                           <div className="flex-1 min-w-0">
-                            <p className="font-medium truncate">{task.title || task.video?.title || task.url}</p>
+                            {task.url ? (
+                              <a
+                                href={task.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="font-medium truncate hover:underline text-primary block"
+                              >
+                                {task.title || task.video?.title || task.url}
+                              </a>
+                            ) : (
+                              <p className="font-medium truncate">{task.title || task.video?.title || task.url}</p>
+                            )}
                             {(task.video?.channel?.name || task.video?.publishedAt) && (
                               <p className="text-xs text-muted-foreground mt-1">
-                                {task.video.channel?.name}
+                                {task.video.channel?.id && subscriptions?.some((s: SubscriptionType) => s.channel.id === task.video?.channel?.id) ? (
+                                  <Link href={`/library?channelId=${task.video.channel.id}`} className="hover:underline text-primary">
+                                    {task.video.channel.name}
+                                  </Link>
+                                ) : (
+                                  task.video.channel?.name
+                                )}
                                 {task.video.channel?.name && task.video.publishedAt && ' · '}
                                 {task.video.publishedAt && `Опубликовано: ${formatDate(task.video.publishedAt)}`}
                               </p>
@@ -2131,14 +2977,27 @@ video={video as VideoCardVideo}
                                 Размер: {formatBytes(task.totalBytes ?? task.downloadedBytes ?? null)}
                               </p>
                             )}
-                            <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
-                              <Badge variant={task.status === 'completed' ? 'default' : 'destructive'}>
-                                {task.status === 'completed' ? (
-                                  <><CheckCircle className="mr-1 h-3 w-3" /> Готово</>
-                                ) : (
-                                  <><XCircle className="mr-1 h-3 w-3" /> Ошибка</>
-                                )}
-                              </Badge>
+                            <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground flex-wrap">
+                              {task.status === 'completed' && task.video?.id ? (
+                                <Badge variant="default" asChild>
+                                  <Link href={`/watch/${task.video.id}`} className="flex items-center gap-1 hover:opacity-90 cursor-pointer">
+                                    <CheckCircle className="mr-1 h-3 w-3" /> Готово
+                                  </Link>
+                                </Badge>
+                              ) : (
+                                <Badge variant={task.status === 'completed' ? 'default' : 'destructive'}>
+                                  {task.status === 'completed' ? (
+                                    <><CheckCircle className="mr-1 h-3 w-3" /> Готово</>
+                                  ) : (
+                                    <><XCircle className="mr-1 h-3 w-3" /> Ошибка</>
+                                  )}
+                                </Badge>
+                              )}
+                              {task.completedAt && (
+                                <span title="Дата и время смены состояния">
+                                  {formatDateTime(task.completedAt)}
+                                </span>
+                              )}
                               {task.errorMsg && (
                                 <span className="text-destructive truncate">{task.errorMsg}</span>
                               )}
@@ -2184,9 +3043,9 @@ video={video as VideoCardVideo}
             </div>
           )}
 
-          {/* Settings Tab */}
+          {/* Вкладка «Настройки» (только для админа): путь, качество, формат, перезапуск */}
           {activeTab === 'settings' && (
-            <div className="space-y-6 max-w-2xl">
+            <div className="max-w-4xl mx-auto space-y-6">
               <h2 className="text-xl font-semibold">Настройки</h2>
 
               <Alert className="mb-4 flex items-start gap-4">
@@ -2385,14 +3244,33 @@ video={video as VideoCardVideo}
                 </CardHeader>
                 <CardContent className="space-y-4">
                   {stats?.deps?.ytdlp && (
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <Label>yt-dlp</Label>
-                        <p className="text-sm text-muted-foreground">Утилита для получения метаданных и загрузки</p>
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <Label>yt-dlp</Label>
+                          <p className="text-sm text-muted-foreground">Утилита для получения метаданных и загрузки</p>
+                        </div>
+                        <Badge
+                          variant={stats.deps.ytdlp.installed ? 'default' : 'destructive'}
+                          className="cursor-pointer"
+                          onClick={() => {
+                            if (typeof window !== 'undefined') {
+                              window.open('https://github.com/yt-dlp/yt-dlp', '_blank', 'noopener,noreferrer');
+                            }
+                          }}
+                          title="Открыть yt-dlp на GitHub"
+                        >
+                          {stats.deps.ytdlp.installed ? stats.deps.ytdlp.version : 'Не установлен'}
+                        </Badge>
                       </div>
-                      <Badge variant={stats.deps.ytdlp.installed ? 'default' : 'destructive'}>
-                        {stats.deps.ytdlp.installed ? stats.deps.ytdlp.version : 'Не установлен'}
-                      </Badge>
+                      {stats.deps.ytdlp.installed && stats.deps.ytdlp.path && (
+                        <p
+                          className="text-xs text-muted-foreground break-all"
+                          title={stats.deps.ytdlp.path}
+                        >
+                          {stats.deps.ytdlp.path}
+                        </p>
+                      )}
                     </div>
                   )}
 
@@ -2461,27 +3339,12 @@ video={video as VideoCardVideo}
               </Card>
             </div>
           )}
-        </div>
-      </main>
 
-      {/* Video Player Dialog */}
+      {/* Видеоплеер: модалка на мобильных, плавающее окно на desktop */}
       <Dialog
         open={!!playingVideo}
         onOpenChange={(open) => {
-          if (!open) {
-            if (isDesktop) saveVideoWindowToStorage(videoWindowRef.current);
-            const last = lastSavedPositionRef.current;
-            if (session?.user && playingVideo?.id && last) {
-              fetch(`/api/videos/${playingVideo.id}/watch`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ position: last.position, completed: last.completed }),
-              }).catch(() => {});
-            }
-            setPlayingVideo(null);
-            setStreamError(null);
-            lastSavedPositionRef.current = null;
-          }
+          if (!open) closeVideoPlayer();
         }}
       >
         <DialogContent
@@ -2545,24 +3408,93 @@ video={video as VideoCardVideo}
                 <span className="flex-1 truncate text-sm font-medium" title={playingVideo.title}>
                   {playingVideo.title}
                 </span>
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  className="h-8 w-8 shrink-0"
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onClick={() => {
-                    const base = (stats as StatsType)?.baseUrl ?? (typeof window !== 'undefined' ? window.location.origin : '');
-                    navigator.clipboard.writeText(`${base}/watch/${playingVideo.id}`).then(
-                      () => toast.success('Ссылка скопирована'),
-                      () => toast.error('Не удалось скопировать')
-                    );
-                  }}
-                  title="Поделиться ссылкой"
-                >
-                  <Share2 className="h-4 w-4" />
-                </Button>
+                {playingVideo.platformId && (
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-8 w-8 shrink-0 cursor-pointer"
+                    asChild
+                  >
+                    <a
+                      href={`https://www.youtube.com/watch?v=${playingVideo.platformId}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="Видео в источнике"
+                      onMouseDown={(e) => e.stopPropagation()}
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                    </a>
+                  </Button>
+                )}
+                <ShareVideoMenu
+                  videoId={playingVideo.id}
+                  title={playingVideo.title}
+                  baseUrl={(stats as StatsType)?.baseUrl ?? (typeof window !== 'undefined' ? window.location.origin : '')}
+                  triggerSize="icon"
+                  triggerClassName="h-8 w-8 cursor-pointer"
+                />
+                {session?.user && (
+                <DropdownMenu open={playlistMenuOpenInPlayer} onOpenChange={setPlaylistMenuOpenInPlayer}>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-8 w-8 shrink-0 cursor-pointer"
+                      title="Добавить в плейлист"
+                      onMouseDown={(e) => e.stopPropagation()}
+                    >
+                      <ListPlus className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" onCloseAutoFocus={(e) => e.preventDefault()}>
+                    {playlists.map((pl) => {
+                      const alreadyIn = pl.videoIds.includes(playingVideo.id);
+                      return (
+                        <DropdownMenuItem
+                          key={pl.id}
+                          disabled={alreadyIn}
+                          onClick={async (e) => {
+                            e.preventDefault();
+                            if (alreadyIn) return;
+                            setPlaylistMenuOpenInPlayer(false);
+                            await api.playlists.update(pl.id, { videoIds: [...pl.videoIds, playingVideo.id] });
+                            queryClient.invalidateQueries({ queryKey: ['playlists'] });
+                            queryClient.invalidateQueries({ queryKey: ['playlist-videos'] });
+                            toast.success(`Добавлено в «${pl.name}»`);
+                          }}
+                        >
+                          {pl.name}
+                          {alreadyIn && ' ✓'}
+                        </DropdownMenuItem>
+                      );
+                    })}
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={async (e) => {
+                        e.preventDefault();
+                        const name = window.prompt('Название плейлиста', playingVideo.title.slice(0, 50));
+                        if (name != null && name.trim()) {
+                          setPlaylistMenuOpenInPlayer(false);
+                          await api.playlists.create(name.trim(), [playingVideo.id]);
+                          queryClient.invalidateQueries({ queryKey: ['playlists'] });
+                          queryClient.invalidateQueries({ queryKey: ['playlist-videos'] });
+                          toast.success('Плейлист создан, видео добавлено');
+                        }
+                      }}
+                    >
+                      <Plus className="h-4 w-4 mr-2" />
+                      Новый плейлист
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                )}
                 <DialogClose asChild>
-                  <Button size="icon" variant="ghost" className="h-8 w-8 shrink-0" onMouseDown={(e) => e.stopPropagation()}>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-8 w-8 shrink-0 cursor-pointer"
+                    onMouseDown={(e) => e.stopPropagation()}
+                  >
                     <X className="h-4 w-4" />
                     <span className="sr-only">Закрыть</span>
                   </Button>
@@ -2571,29 +3503,92 @@ video={video as VideoCardVideo}
             </>
           )}
 
-          {!isDesktop && playingVideo && (
+          {!isDesktop && playingVideo && videoControlsVisible && (
             <div className="absolute top-2 right-2 z-50 flex gap-2">
-              <Button
-                size="icon"
+              {playingVideo.platformId && (
+                <Button
+                  size="icon"
+                  variant="secondary"
+                  className="h-8 w-8 shrink-0 rounded-full bg-black/50 hover:bg-black/70 text-white cursor-pointer"
+                  asChild
+                >
+                  <a
+                    href={`https://www.youtube.com/watch?v=${playingVideo.platformId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title="Видео в источнике"
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                  </a>
+                </Button>
+              )}
+              <ShareVideoMenu
+                videoId={playingVideo.id}
+                title={playingVideo.title}
+                baseUrl={(stats as StatsType)?.baseUrl ?? (typeof window !== 'undefined' ? window.location.origin : '')}
+                triggerSize="icon"
                 variant="secondary"
-                className="h-8 w-8 shrink-0 rounded-full bg-black/50 hover:bg-black/70 text-white"
-                onClick={() => {
-                  const base = (stats as StatsType)?.baseUrl ?? (typeof window !== 'undefined' ? window.location.origin : '');
-                  const url = `${base}/watch/${playingVideo.id}`;
-                  navigator.clipboard.writeText(url).then(
-                    () => toast.success('Ссылка скопирована'),
-                    () => toast.error('Не удалось скопировать')
-                  );
-                }}
-                title="Поделиться ссылкой"
-              >
-                <Share2 className="h-4 w-4" />
-              </Button>
+                triggerClassName="h-8 w-8 shrink-0 rounded-full bg-black/50 hover:bg-black/70 text-white cursor-pointer"
+              />
+              {session?.user && (
+              <DropdownMenu open={playlistMenuOpenInPlayer} onOpenChange={setPlaylistMenuOpenInPlayer}>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    size="icon"
+                    variant="secondary"
+                    className="h-8 w-8 shrink-0 rounded-full bg-black/50 hover:bg-black/70 text-white cursor-pointer"
+                    title="Добавить в плейлист"
+                  >
+                    <ListPlus className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" onCloseAutoFocus={(e) => e.preventDefault()}>
+                  {playlists.map((pl) => {
+                    const alreadyIn = pl.videoIds.includes(playingVideo.id);
+                    return (
+                      <DropdownMenuItem
+                        key={pl.id}
+                        disabled={alreadyIn}
+                        onClick={async (e) => {
+                          e.preventDefault();
+                          if (alreadyIn) return;
+                          setPlaylistMenuOpenInPlayer(false);
+                          await api.playlists.update(pl.id, { videoIds: [...pl.videoIds, playingVideo.id] });
+                          queryClient.invalidateQueries({ queryKey: ['playlists'] });
+                          queryClient.invalidateQueries({ queryKey: ['playlist-videos'] });
+                          toast.success(`Добавлено в «${pl.name}»`);
+                        }}
+                      >
+                        {pl.name}
+                        {alreadyIn && ' ✓'}
+                      </DropdownMenuItem>
+                    );
+                  })}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onClick={async (e) => {
+                      e.preventDefault();
+                      const name = window.prompt('Название плейлиста', playingVideo.title.slice(0, 50));
+                      if (name != null && name.trim()) {
+                        setPlaylistMenuOpenInPlayer(false);
+                        await api.playlists.create(name.trim(), [playingVideo.id]);
+                        queryClient.invalidateQueries({ queryKey: ['playlists'] });
+                        queryClient.invalidateQueries({ queryKey: ['playlist-videos'] });
+                        toast.success('Плейлист создан, видео добавлено');
+                      }
+                    }}
+                  >
+                    <Plus className="h-4 w-4 mr-2" />
+                    Новый плейлист
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              )}
               <DialogClose asChild>
                 <Button
                   size="icon"
                   variant="secondary"
-                  className="h-8 w-8 shrink-0 rounded-full bg-black/50 hover:bg-black/70 text-white"
+                  className="h-8 w-8 shrink-0 rounded-full bg-black/50 hover:bg-black/70 text-white cursor-pointer"
                   title="Закрыть"
                 >
                   <X className="h-4 w-4" />
@@ -2612,20 +3607,25 @@ video={video as VideoCardVideo}
                   <p className="text-sm text-white/80 text-center">{streamError}</p>
                   <p className="text-xs text-white/60">Проверьте путь в .env.local и наличие файла</p>
                 </div>
-              ) : session?.user && watchPositionLoading ? (
-                <div className="flex items-center justify-center aspect-video bg-black text-white">
-                  <Loader2 className="h-10 w-10 animate-spin text-white/80" />
-                </div>
               ) : (
                 <>
-                  <div className={cn('bg-black', isDesktop ? 'flex-1 min-h-0 flex flex-col' : 'aspect-video')}>
+                  {/* Спиннер поверх плеера при загрузке позиции — не размонтируем VideoPlayer при смене видео, иначе теряются fullscreen и autoplay */}
+                  {session?.user && watchPositionLoading && (
+                    <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70">
+                      <Loader2 className="h-10 w-10 animate-spin text-white/80" />
+                    </div>
+                  )}
+                  <div className={cn('bg-black', isDesktop ? 'flex-1 min-h-0 flex flex-col' : 'aspect-video py-8 relative')}>
                     <VideoPlayer
                       src={`/api/stream/${playingVideo.id}`}
                       title={playingVideo.title}
                       channelName={playingVideo.channel?.name ?? undefined}
+                      channelId={playingVideo.channel?.id ?? undefined}
                       publishedAt={playingVideo.publishedAt ?? undefined}
                       initialTime={session?.user ? watchPosition : 0}
                       fillContainer={isDesktop}
+                      chapters={playerChapters}
+                      onControlsVisibilityChange={setVideoControlsVisible}
                       onPositionSave={
                         session?.user && playingVideo?.id
                           ? (position, completed) => {
@@ -2642,6 +3642,28 @@ video={video as VideoCardVideo}
                         setStreamError(message);
                         toast.error('Видео недоступно. Проверьте путь к файлу.');
                       }}
+                      onPrevVideo={
+                        hasPrevQueue(playbackQueueContext)
+                          ? () => {
+                              const prev = getPrevInQueue(playbackQueueContext);
+                              if (prev && playbackQueueContext) {
+                                setPlayingVideo(prev);
+                                setPlaybackQueueContext({ ...playbackQueueContext, index: playbackQueueContext.index - 1 });
+                              }
+                            }
+                          : undefined
+                      }
+                      onNextVideo={
+                        hasNextQueue(playbackQueueContext)
+                          ? () => {
+                              const next = getNextInQueue(playbackQueueContext);
+                              if (next && playbackQueueContext) {
+                                setPlayingVideo(next);
+                                setPlaybackQueueContext({ ...playbackQueueContext, index: playbackQueueContext.index + 1 });
+                              }
+                            }
+                          : undefined
+                      }
                     />
                   </div>
                   {isDesktop && (
@@ -2693,7 +3715,7 @@ video={video as VideoCardVideo}
         </DialogContent>
       </Dialog>
 
-      {/* Dependencies Dialog */}
+      {/* Диалог зависимостей: инструкции по установке yt-dlp и ffmpeg */}
       <Dialog open={depsDialogOpen} onOpenChange={setDepsDialogOpen}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
@@ -2760,7 +3782,7 @@ video={video as VideoCardVideo}
         </DialogContent>
       </Dialog>
 
-      {/* Download Dialog */}
+      {/* Диалог «Скачать видео»: URL, получение информации, выбор качества */}
       <Dialog open={downloadDialogOpen} onOpenChange={setDownloadDialogOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
@@ -2838,7 +3860,7 @@ video={video as VideoCardVideo}
         </DialogContent>
       </Dialog>
 
-      {/* Subscription Dialog */}
+      {/* Диалог добавления подписки на канал */}
       <Dialog
         open={subscriptionDialogOpen}
         onOpenChange={(open) => {
@@ -2939,7 +3961,7 @@ video={video as VideoCardVideo}
         </DialogContent>
       </Dialog>
 
-      {/* Edit Subscription Dialog */}
+      {/* Диалог редактирования подписки (дни, качество, категория) */}
       <Dialog
         open={!!editSubscriptionId}
         onOpenChange={(open) => !open && setEditSubscriptionId(null)}
@@ -3060,7 +4082,7 @@ video={video as VideoCardVideo}
         </DialogContent>
       </Dialog>
 
-      {/* Delete Video Confirmation */}
+      {/* Подтверждение удаления видео */}
       <AlertDialog open={!!deleteVideoId} onOpenChange={() => setDeleteVideoId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -3092,7 +4114,7 @@ video={video as VideoCardVideo}
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Delete Subscription Confirmation */}
+      {/* Подтверждение удаления подписки */}
       <AlertDialog open={!!deleteSubscriptionId} onOpenChange={() => setDeleteSubscriptionId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -3113,7 +4135,7 @@ video={video as VideoCardVideo}
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Clean old videos (by days) */}
+      {/* Диалог удаления старых видео подписки по количеству дней */}
       <Dialog open={!!cleanOldSubscriptionId} onOpenChange={(open) => !open && setCleanOldSubscriptionId(null)}>
         <DialogContent>
           <DialogHeader>
@@ -3150,7 +4172,7 @@ video={video as VideoCardVideo}
         </DialogContent>
       </Dialog>
 
-      {/* Clear Downloaded Videos Confirmation */}
+      {/* Подтверждение очистки скачанных видео (канал или все) */}
       <AlertDialog open={!!clearVideosChannelId} onOpenChange={() => setClearVideosChannelId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -3174,10 +4196,11 @@ video={video as VideoCardVideo}
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </>
   );
 }
 
+/** Точка входа: обёртка в Suspense из-за useSearchParams. */
 export default function Page() {
   return (
     <Suspense fallback={<div className="min-h-screen bg-background flex items-center justify-center" />}>

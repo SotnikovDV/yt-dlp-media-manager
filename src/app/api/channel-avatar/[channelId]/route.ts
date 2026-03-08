@@ -38,9 +38,8 @@ export async function GET(
 
     const ext = path.extname(absPath).toLowerCase();
     const ct = contentTypeFromExt(ext);
-    const nodeStream = createReadStream(absPath, {
-      ...(request.signal && { signal: request.signal }),
-    });
+    // Не передаём request.signal — избегаем "Controller is already closed" при отключении клиента
+    const nodeStream = createReadStream(absPath);
     nodeStream.on('error', () => {});
     const webStream = Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
     return new NextResponse(webStream, {

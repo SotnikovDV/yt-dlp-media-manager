@@ -56,10 +56,35 @@ model Video {
   downloadTasks  DownloadTask[]
   favorites      Favorite[]
   userIndividualVideos UserIndividualVideo[]
+  playlistVideos PlaylistVideo[]
 
   @@unique([platformId])
   @@index([channelId])
   @@index([downloadedAt])
+}
+
+model Playlist {
+  id        String   @id @default(cuid())
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId   String
+  name     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  videos   PlaylistVideo[]
+
+  @@index([userId])
+}
+
+model PlaylistVideo {
+  playlist   Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+  playlistId String
+  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  videoId   String
+  position  Int      @default(0)
+
+  @@id([playlistId, videoId])
+  @@index([playlistId])
+  @@index([videoId])
 }
 
 model Favorite {
@@ -115,6 +140,7 @@ model Subscription {
   lastCheckAt      DateTime?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+  downloadTasks    DownloadTask[]
 
   @@unique([userId, channelId])
   @@index([isActive])
@@ -127,6 +153,8 @@ model DownloadTask {
   url             String
   video           Video?   @relation(fields: [videoId], references: [id], onDelete: SetNull)
   videoId         String?
+  subscription    Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  subscriptionId  String?
   title           String?
   status          String   @default("pending")
   progress        Int      @default(0)
@@ -144,6 +172,7 @@ model DownloadTask {
   @@index([status])
   @@index([createdAt])
   @@index([videoId])
+  @@index([subscriptionId])
 }
 
 model WatchHistory {
@@ -201,6 +230,7 @@ model User {
   watchHistory        WatchHistory[]
   favorites           Favorite[]
   userIndividualVideos UserIndividualVideo[]
+  playlists           Playlist[]
 
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt

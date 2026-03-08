@@ -9,12 +9,20 @@ const AUTH_SECRET =
   process.env.NEXTAUTH_SECRET ||
   (process.env.NODE_ENV !== 'production' ? 'dev-insecure-secret-change-me' : undefined);
 
+/**
+ * Создаёт или обновляет учётную запись администратора по умолчанию (username: admin).
+ * Пароль: INITIAL_ADMIN_PASSWORD в production (обязательно), в development по умолчанию 'admin'.
+ * В production без INITIAL_ADMIN_PASSWORD учётная запись не создаётся — создайте админа через /register и назначьте права вручную или задайте INITIAL_ADMIN_PASSWORD.
+ */
 export async function ensureDefaultAdmin() {
   const username = 'admin';
-  const password = 'admin';
+  const envPassword = process.env.INITIAL_ADMIN_PASSWORD?.trim();
+  const password =
+    envPassword || (process.env.NODE_ENV !== 'production' ? 'admin' : undefined);
 
   const existing = await db.user.findUnique({ where: { username } });
   if (!existing) {
+    if (!password) return; // в production без INITIAL_ADMIN_PASSWORD не создаём дефолтного админа
     const passwordHash = await bcrypt.hash(password, 10);
     await db.user.create({
       data: {
@@ -31,7 +39,7 @@ export async function ensureDefaultAdmin() {
   const updates: Record<string, any> = {};
   if (!existing.isAdmin) updates.isAdmin = true;
   if (!existing.isAllowed) updates.isAllowed = true;
-  if (!existing.passwordHash) updates.passwordHash = await bcrypt.hash(password, 10);
+  if (!existing.passwordHash && password) updates.passwordHash = await bcrypt.hash(password, 10);
   if (!existing.name) updates.name = 'Administrator';
   if (Object.keys(updates).length > 0) {
     await db.user.update({ where: { id: existing.id }, data: updates });
