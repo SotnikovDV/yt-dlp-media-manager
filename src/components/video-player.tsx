@@ -676,6 +676,7 @@ export function VideoPlayer({
   return (
     <div
       ref={containerRef}
+      data-player-role={mini ? 'mini' : undefined}
       className={cn(
         ' w-full bg-black select-none',  // relative
         fillContainer ? 'h-full min-h-0' : 'aspect-video'

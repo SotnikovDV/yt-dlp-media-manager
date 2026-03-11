@@ -32,6 +32,7 @@ export type GlobalPlayerActions = {
   setMode: (mode: PlayerMode) => void;
   setWasFullscreenBeforeMiniplayer: (value: boolean) => void;
   updateInitialTime: (time: number) => void;
+  setAutoPlay: (value: boolean) => void;
 };
 
 const PlayerStateContext = createContext<GlobalPlayerState | undefined>(undefined);
@@ -87,6 +88,19 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const setAutoPlay = useCallback((value: boolean) => {
+    setState((prev) => {
+      if (!prev.currentTrack) return prev;
+      return {
+        ...prev,
+        currentTrack: {
+          ...prev.currentTrack,
+          autoPlay: value,
+        },
+      };
+    });
+  }, []);
+
   const actions = useMemo<GlobalPlayerActions>(
     () => ({
       setTrack,
@@ -94,8 +108,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       setMode,
       setWasFullscreenBeforeMiniplayer,
       updateInitialTime,
+      setAutoPlay,
     }),
-    [setTrack, clear, setMode, setWasFullscreenBeforeMiniplayer, updateInitialTime]
+    [setTrack, clear, setMode, setWasFullscreenBeforeMiniplayer, updateInitialTime, setAutoPlay]
   );
 
   return (

@@ -704,7 +704,7 @@ function MediaManagerContent() {
   >(undefined);
   const playingVideoRef = useRef<VideoType | null>(null);
   playingVideoRef.current = playingVideo;
-  const { mode: globalPlayerMode } = useGlobalPlayerState();
+  const { mode: globalPlayerMode, currentTrack } = useGlobalPlayerState();
 
   /** Открыть видео в контексте очереди воспроизведения (для prev/next). */
   const openVideoInQueue = useCallback(
@@ -745,16 +745,17 @@ function MediaManagerContent() {
     setStreamError(null);
   }, [playingVideo?.id]);
 
-  // Если мини-плеер был запущен из полноэкранного режима и пользователь выбрал «Развернуть»,
-  // восстанавливаем полноэкранный режим для основного плеера.
+  // Реагируем на глобальное событие закрытия мини-плеера
   useEffect(() => {
-    if (globalPlayerMode !== 'fullscreen') return;
-    if (!playingVideo?.id) return;
-    const el = videoContainerRef.current;
-    if (!el) return;
-    if (document.fullscreenElement === el) return;
-    el.requestFullscreen().catch(() => {});
-  }, [globalPlayerMode, playingVideo?.id]);
+    if (typeof window === 'undefined') return;
+    const handler = () => {
+      closeVideoPlayer();
+    };
+    window.addEventListener('global-mini-player-close', handler);
+    return () => {
+      window.removeEventListener('global-mini-player-close', handler);
+    };
+  }, [closeVideoPlayer]);
 
   // Загрузка позиции просмотра при открытии видео (только для авторизованных)
   useEffect(() => {
@@ -4092,6 +4093,7 @@ function MediaManagerContent() {
                   <div
                     ref={videoContainerRef}
                     className={cn('bg-black', isDesktop ? 'flex-1 min-h-0 flex flex-col' : 'aspect-video py-8 relative')}
+                    data-player-role="primary"
                   >
                     <VideoPlayer
                       src={`/api/stream/${playingVideo.id}`}
@@ -4099,7 +4101,18 @@ function MediaManagerContent() {
                       channelName={playingVideo.channel?.name ?? undefined}
                       channelId={playingVideo.channel?.id ?? undefined}
                       publishedAt={playingVideo.publishedAt ?? undefined}
-                      initialTime={session?.user ? watchPosition : 0}
+                      initialTime={
+                        currentTrack && currentTrack.id === `/api/stream/${playingVideo.id}`
+                          ? currentTrack.initialTime ?? (session?.user ? watchPosition : 0)
+                          : session?.user
+                            ? watchPosition
+                            : 0
+                      }
+                      autoPlay={
+                        currentTrack && currentTrack.id === `/api/stream/${playingVideo.id}`
+                          ? currentTrack.autoPlay
+                          : undefined
+                      }
                       fillContainer={isDesktop}
                       chapters={playerChapters}
                       onControlsVisibilityChange={setVideoControlsVisible}

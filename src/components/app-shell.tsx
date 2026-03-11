@@ -35,52 +35,89 @@ import { Maximize2 } from 'lucide-react';
 
 function GlobalMiniPlayer() {
   const { mode, currentTrack, wasFullscreenBeforeMiniplayer } = useGlobalPlayerState();
-  const { setMode, clear, updateInitialTime } = useGlobalPlayerActions();
+  const { setMode, clear, updateInitialTime, setAutoPlay } = useGlobalPlayerActions();
 
   const isVisible = mode === 'miniplayer' && currentTrack;
   if (!isVisible || !currentTrack) return null;
 
+  const persistPosition = (position: number | undefined) => {
+    // Если позиции нет (мы ни разу не сохранили её в сторе), не трогаем серверное значение
+    if (position == null || !Number.isFinite(position)) return;
+    const pos = Math.floor(position);
+    const src = currentTrack.id || currentTrack.src;
+    const videoId = src.split('/').pop();
+    if (!videoId) return;
+    fetch(`/api/videos/${videoId}/watch`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ position: pos, completed: false }),
+    }).catch(() => {});
+  };
+
   return (
     <div className="fixed bottom-0 left-0 right-0 z-50 pointer-events-none">
       <div className="mx-auto max-w-6xl px-2 pb-2 pointer-events-auto">
-        <div className="bg-black/60 text-white hover:bg-black/90 border border-border rounded-lg shadow-lg flex items-center gap-3 p-0"> {/* bg-muted */}
-          <div className="w-32 aspect-video bg-black rounded-md overflow-hidden shrink-0">
-            <VideoPlayer
-              src={currentTrack.src}
-              title={currentTrack.title}
-              channelName={currentTrack.channelName}
-              channelId={currentTrack.channelId}
-              poster={currentTrack.poster}
-              publishedAt={currentTrack.publishedAt}
-              chapters={currentTrack.chapters}
-              initialTime={currentTrack.initialTime}
-              fillContainer
-              mini
-              autoPlay={currentTrack.autoPlay}
-              onPositionSave={(pos) => {
-                updateInitialTime(pos);
-              }}
-            />
-          </div>
-          <div className="flex-1 min-w-0 flex flex-col gap-1">
-            <div className="text-sm font-medium truncate">{currentTrack.title}</div>
-            {currentTrack.channelName && (
-              <div className="text-xs truncate">
-                {currentTrack.channelName}
-              </div>
-            )}
-          </div>
-          <div className="flex items-center gap-1">
+        <div className="bg-black/60 text-white border border-border rounded-lg shadow-lg flex items-center justify-between gap-2 p-0">
+          {/* Левая часть: превью + текст, кликабельная для Play/Pause */}
+          <button
+            type="button"
+            className="flex items-center gap-2 flex-1 min-w-0 px-2 py-1 text-left hover:bg-black/70 transition-colors"
+            onClick={() => {
+              if (typeof document === 'undefined') return;
+              const el = document.querySelector('[data-player-role=\"mini\"]') as HTMLElement | null;
+              el?.click();
+            }}
+          >
+            <div className="w-32 aspect-video bg-black rounded-md overflow-hidden shrink-0">
+              <VideoPlayer
+                src={currentTrack.src}
+                title={currentTrack.title}
+                channelName={currentTrack.channelName}
+                channelId={currentTrack.channelId}
+                poster={currentTrack.poster}
+                publishedAt={currentTrack.publishedAt}
+                chapters={currentTrack.chapters}
+                initialTime={currentTrack.initialTime}
+                fillContainer
+                mini
+                autoPlay={currentTrack.autoPlay}
+                onPositionSave={(pos) => {
+                  updateInitialTime(pos);
+                  // Сохраняем позицию и на сервере, как в основном плеере
+                  persistPosition(pos);
+                }}
+              />
+            </div>
+            <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+              <div className="text-sm font-medium truncate">{currentTrack.title}</div>
+              {currentTrack.channelName && (
+                <div className="text-xs truncate">
+                  {currentTrack.channelName}
+                </div>
+              )}
+            </div>
+          </button>
+
+          {/* Правая часть: управление режимами */}
+          <div className="flex items-center gap-1 pr-2">
             <Button
               variant="ghost"
               size="icon"
               className="h-8 w-8"
               title="Развернуть"
               onClick={() => {
-                if (wasFullscreenBeforeMiniplayer) {
-                  setMode('fullscreen');
-                } else {
-                  setMode('embedded');
+                const shouldFullscreen = wasFullscreenBeforeMiniplayer;
+                // при разворачивании всегда хотим продолжить воспроизведение
+                setAutoPlay(true);
+                setMode('embedded');
+                if (typeof document !== 'undefined' && shouldFullscreen) {
+                  // Даём странице время смонтировать основной плеер
+                  setTimeout(() => {
+                    const el = document.querySelector('[data-player-role=\"primary\"]') as HTMLElement | null;
+                    if (el) {
+                      el.requestFullscreen().catch(() => {});
+                    }
+                  }, 0);
                 }
               }}
             >
@@ -92,7 +129,12 @@ function GlobalMiniPlayer() {
               className="h-8 w-8"
               title="Закрыть"
               onClick={() => {
+                // При закрытии мини-плеера явно сохраняем последнюю известную позицию
+                persistPosition(currentTrack.initialTime);
                 clear();
+                if (typeof window !== 'undefined') {
+                  window.dispatchEvent(new CustomEvent('global-mini-player-close'));
+                }
               }}
             >
               <X className="h-4 w-4" />
