@@ -16,6 +16,7 @@ import {
   Menu,
   X,
   FolderOpen,
+  Tag,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -28,6 +29,80 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
+import { VideoPlayer } from '@/components/video-player';
+import { useGlobalPlayerState, useGlobalPlayerActions } from '@/lib/player-store';
+import { Maximize2 } from 'lucide-react';
+
+function GlobalMiniPlayer() {
+  const { mode, currentTrack, wasFullscreenBeforeMiniplayer } = useGlobalPlayerState();
+  const { setMode, clear, updateInitialTime } = useGlobalPlayerActions();
+
+  const isVisible = mode === 'miniplayer' && currentTrack;
+  if (!isVisible || !currentTrack) return null;
+
+  return (
+    <div className="fixed bottom-0 left-0 right-0 z-50 pointer-events-none">
+      <div className="mx-auto max-w-6xl px-2 pb-2 pointer-events-auto">
+        <div className="bg-black/60 text-white hover:bg-black/90 border border-border rounded-lg shadow-lg flex items-center gap-3 p-0"> {/* bg-muted */}
+          <div className="w-32 aspect-video bg-black rounded-md overflow-hidden shrink-0">
+            <VideoPlayer
+              src={currentTrack.src}
+              title={currentTrack.title}
+              channelName={currentTrack.channelName}
+              channelId={currentTrack.channelId}
+              poster={currentTrack.poster}
+              publishedAt={currentTrack.publishedAt}
+              chapters={currentTrack.chapters}
+              initialTime={currentTrack.initialTime}
+              fillContainer
+              mini
+              autoPlay={currentTrack.autoPlay}
+              onPositionSave={(pos) => {
+                updateInitialTime(pos);
+              }}
+            />
+          </div>
+          <div className="flex-1 min-w-0 flex flex-col gap-1">
+            <div className="text-sm font-medium truncate">{currentTrack.title}</div>
+            {currentTrack.channelName && (
+              <div className="text-xs truncate">
+                {currentTrack.channelName}
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              title="Развернуть"
+              onClick={() => {
+                if (wasFullscreenBeforeMiniplayer) {
+                  setMode('fullscreen');
+                } else {
+                  setMode('embedded');
+                }
+              }}
+            >
+              <Maximize2 className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              title="Закрыть"
+              onClick={() => {
+                clear();
+              }}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 const NAV_ITEMS = [
   { id: 'library', label: 'Медиатека', href: '/library' },
@@ -38,6 +113,8 @@ const NAV_ITEMS = [
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { data: session } = useSession();
   const pathname = usePathname();
+  const { mode: globalPlayerMode, currentTrack } = useGlobalPlayerState();
+  const isMiniPlayerVisible = globalPlayerMode === 'miniplayer' && !!currentTrack;
 
   const userDisplay = session?.user?.name || session?.user?.email || (session?.user as { username?: string })?.username || 'Пользователь';
   const userId = (session?.user as { id?: string })?.id;
@@ -64,15 +141,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     },
   });
 
-  const UserMenu = ({
-    compact,
-    open,
-    onOpenChange,
-  }: {
-    compact?: boolean;
-    open?: boolean;
-    onOpenChange?: (open: boolean) => void;
-  }) => {
+  const { data: tagsData } = useQuery({
+    queryKey: ['tags'],
+    queryFn: async () => {
+      const res = await fetch('/api/tags');
+      if (!res.ok) throw new Error('Failed to fetch tags');
+      return res.json() as Promise<{ tags: { id: string; name: string; count: number }[] }>;
+    },
+  });
+
+  const renderUserMenu = (opts: { compact?: boolean; open?: boolean; onOpenChange?: (open: boolean) => void }) => {
+    const { compact, open, onOpenChange } = opts;
     if (!userId) return null;
     return (
       <DropdownMenu open={open} onOpenChange={(v) => onOpenChange?.(v)}>
@@ -137,7 +216,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </Button>
         <h1 className="ml-2 text-xl font-medium tracking-tight">Media Manager</h1>
         <div className="ml-auto">
-          <UserMenu compact open={userMenuOpenHeader} onOpenChange={setUserMenuOpenHeader} />
+          {renderUserMenu({ compact: true, open: userMenuOpenHeader, onOpenChange: setUserMenuOpenHeader })}
         </div>
       </header>
 
@@ -206,6 +285,35 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           ))}
         </nav>
 
+        {sidebarOpen && tagsData?.tags && tagsData.tags.length > 0 && (
+          <div className="px-3 py-2 border-t border-border/80">
+            <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1.5">
+              <Tag className="h-3.5 w-5" />
+              Теги
+            </p>
+            <div className="flex flex-wrap gap-0.5">
+              {tagsData.tags.map((tag) => {
+                const maxCount = Math.max(...tagsData.tags!.map((t) => t.count), 1);
+                const weight = maxCount > 1 ? 0.7 + (0.3 * tag.count) / (maxCount * 2) : 1;
+                return (
+                  <Link
+                    key={tag.id}
+                    href={`/library?tagId=${encodeURIComponent(tag.id)}`}
+                    className={cn(
+                      'inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium transition-colors',
+                      'bg-muted/80 text-muted-foreground hover:bg-primary/15 hover:text-primary'
+                    )}
+                    style={{ opacity: weight }}
+                    title={`${tag.name} (${tag.count})`}
+                  >
+                    {tag.name}
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {sidebarOpen && stats && stats.videos != null && stats.channels != null && (
           <div className="p-4 border-t border-border/80 space-y-2 text-sm text-muted-foreground">
             <div className="flex justify-between">
@@ -256,18 +364,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <p className="text-xs text-muted-foreground truncate">{session?.user?.email || ''}</p>
             </div>
           ) : null}
-          <UserMenu open={userMenuOpenSidebar} onOpenChange={setUserMenuOpenSidebar} />
+          {renderUserMenu({ open: userMenuOpenSidebar, onOpenChange: setUserMenuOpenSidebar })}
         </div>
       </aside>
 
       <main
         className={cn(
           'transition-all duration-300 pt-14 lg:pt-0 min-h-screen',
-          sidebarOpen ? 'lg:ml-64' : 'lg:ml-16'
+          sidebarOpen ? 'lg:ml-64' : 'lg:ml-16',
+          isMiniPlayerVisible && 'pb-28'
         )}
       >
         <div className="p-4 lg:px-6 lg:pb-6 lg:pt-0">{children}</div>
       </main>
+      <GlobalMiniPlayer />
     </div>
   );
 }

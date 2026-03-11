@@ -72,3 +72,46 @@ export async function getChaptersForVideo(
     return [];
   }
 }
+
+/** Максимальная длина одного тега в символах (для обрезки из JSON) */
+const MAX_TAG_LENGTH = 100;
+
+/**
+ * Читает теги (tags) из .info.json рядом с видео (формат yt-dlp).
+ * Возвращает пустой массив, если файла нет, поля tags нет или произошла ошибка.
+ */
+export async function getTagsForVideo(
+  video: VideoWithPath,
+  getDownloadPath: GetDownloadPath
+): Promise<string[]> {
+  try {
+    const videoPath = await resolveVideoFilePath(
+      video.filePath,
+      getDownloadPath,
+      video.platformId
+    );
+    const dir = path.dirname(videoPath);
+    const base = path.basename(videoPath, path.extname(videoPath));
+    const infoPath = path.join(dir, `${base}.info.json`);
+
+    if (!existsSync(infoPath)) return [];
+
+    const raw = await readFile(infoPath, 'utf-8');
+    const data = JSON.parse(raw) as { tags?: unknown };
+
+    const tags = data.tags;
+    if (!Array.isArray(tags)) return [];
+
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const t of tags) {
+      const name = typeof t === 'string' ? t.trim().toLowerCase() : '';
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      out.push(name.slice(0, MAX_TAG_LENGTH));
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}

@@ -5,7 +5,12 @@ import { createReadStream } from 'fs';
 import { stat } from 'fs/promises';
 import { Readable } from 'stream';
 import path from 'path';
-import { resolveVideoFilePath, sanitizeDownloadFilename } from '@/lib/path-utils';
+import {
+  resolveVideoFilePath,
+  sanitizeDownloadFilename,
+  findVideoByPlatformId,
+  getDownloadSearchDirs,
+} from '@/lib/path-utils';
 import { getDownloadPathAsync } from '@/lib/settings';
 
 export const runtime = 'nodejs';
@@ -19,23 +24,44 @@ export async function GET(
     const { id } = await params;
     
     let video = await db.video.findUnique({
-      where: { id }
+      where: { id },
     });
     if (!video) {
       video = await db.video.findFirst({
-        where: { platformId: id }
+        where: { platformId: id },
       });
     }
 
-    if (!video || !video.filePath) {
+    if (!video) {
       return NextResponse.json({ error: 'Video not found' }, { status: 404 });
     }
+    let filePath: string | null = null;
 
-    const filePath = await resolveVideoFilePath(
-      video.filePath,
-      getDownloadPathAsync,
-      video.platformId
-    );
+    // Основной путь: используем filePath из БД, если он есть
+    if (video.filePath) {
+      filePath = await resolveVideoFilePath(
+        video.filePath,
+        getDownloadPathAsync,
+        video.platformId
+      );
+    }
+
+    // Фолбэк: если в БД нет пути, но есть platformId — попробуем найти файл по ID в папке загрузок
+    if (!filePath && video.platformId) {
+      const downloadPath = await getDownloadPathAsync();
+      const searchDirs = getDownloadSearchDirs(downloadPath);
+      for (const dir of searchDirs) {
+        const found = findVideoByPlatformId(dir, video.platformId);
+        if (found) {
+          filePath = found;
+          break;
+        }
+      }
+    }
+
+    if (!filePath) {
+      return NextResponse.json({ error: 'File not found' }, { status: 404 });
+    }
 
     if (!existsSync(filePath)) {
       if (process.env.NODE_ENV === 'development') {

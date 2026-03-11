@@ -13,6 +13,7 @@ import {
   Loader2,
   SkipBack,
   SkipForward,
+  PictureInPicture2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
@@ -24,6 +25,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
+import { useGlobalPlayerActions } from '@/lib/player-store';
 
 const VOLUME_STORAGE_KEY = 'video-player-volume';
 const AUTO_NEXT_STORAGE_KEY = 'video-player-auto-next';
@@ -32,6 +34,8 @@ const CONTROLS_HIDE_MS = 10000;
 const SEEK_STEP = 10;
 const VOLUME_STEP = 0.05;
 const POSITION_SAVE_THROTTLE_MS = 5000;
+/** Высота зоны снизу, где клик не должен ставить play/pause (при видимых контролах) */
+const BOTTOM_CONTROLS_EXCLUDE_PX = 130;
 /** Доля ширины контейнера для зоны «край» (удержание — перемотка) */
 const EDGE_ZONE_FRACTION = 0.15;
 const HOLD_DELAY_MS = 400;
@@ -82,6 +86,10 @@ export interface VideoPlayerProps {
   onNextVideo?: () => void;
   /** Главы из .info.json для разметки полосы прогресса (как в YouTube) */
   chapters?: { startTime: number; endTime: number; title: string }[];
+  /** Компактный режим (мини-плеер): без центральной большой кнопки и лишней информации */
+  mini?: boolean;
+  /** Автоматически запустить воспроизведение при готовности (используется в мини-плеере) */
+  autoPlay?: boolean;
 }
 
 export function VideoPlayer({
@@ -99,6 +107,8 @@ export function VideoPlayer({
   onPrevVideo,
   onNextVideo,
   chapters,
+  mini,
+  autoPlay,
 }: VideoPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -138,6 +148,9 @@ export function VideoPlayer({
   const holdZoneRef = useRef<'left' | 'right' | null>(null);
   const ignoreNextClickRef = useRef(false);
   const holdTouchIdRef = useRef<number | null>(null);
+  const isAndroidChromeRef = useRef<boolean | null>(null);
+  const { setTrack, setMode, setWasFullscreenBeforeMiniplayer } = useGlobalPlayerActions();
+  const autoPlayOnceRef = useRef(false);
 
   // Сообщаем родителю, когда меняется видимость контролов
   useEffect(() => {
@@ -166,8 +179,20 @@ export function VideoPlayer({
     };
   }, []);
 
+  // Ленивая детекция Android Chrome — чтобы при необходимости можно было менять поведение,
+  // не трогая основной рендер (например, не вызывать manual pause при смене вкладки).
+  useEffect(() => {
+    if (typeof navigator === 'undefined') return;
+    if (isAndroidChromeRef.current != null) return;
+    const ua = navigator.userAgent || '';
+    const isAndroid = /Android/i.test(ua);
+    const isChrome = /Chrome\/\d+/i.test(ua) && !/Edg\//i.test(ua) && !/OPR\//i.test(ua);
+    isAndroidChromeRef.current = isAndroid && isChrome;
+  }, []);
+
   useEffect(() => {
     initialTimeSetRef.current = false;
+    autoPlayOnceRef.current = false;
   }, [src]);
 
   // Синхронизация громкости и mute с DOM-элементом
@@ -457,10 +482,19 @@ export function VideoPlayer({
         target.closest('[data-slot="dropdown-menu-content"]')
       )
         return;
+      // Если видна нижняя панель управления и клик пришел из её вертикальной зоны,
+      // не переключаем play/pause (чтобы на десктопе и мобиле клики по области панели
+      // не запускали/останавливали воспроизведение).
+      if (controlsVisible && containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        if (e.clientY > rect.bottom - BOTTOM_CONTROLS_EXCLUDE_PX) {
+          return;
+        }
+      }
       resetHideTimer();
       togglePlay();
     },
-    [resetHideTimer, togglePlay]
+    [resetHideTimer, togglePlay, controlsVisible]
   );
 
   const handleHoldMouseDown = useCallback(
@@ -547,7 +581,97 @@ export function VideoPlayer({
       autoPlayAfterAdvanceRef.current = false;
       videoRef.current.play().catch(() => {});
     }
-  }, []);
+    if (autoPlay && !autoPlayOnceRef.current && videoRef.current) {
+      autoPlayOnceRef.current = true;
+      videoRef.current.play().catch(() => {});
+    }
+  }, [autoPlay]);
+
+  // Интеграция с Media Session API для корректной работы системных контролов Android
+  useEffect(() => {
+    if (typeof navigator === 'undefined') return;
+    const mediaSession = (navigator as unknown as { mediaSession?: MediaSession }).mediaSession;
+    if (!mediaSession) return;
+
+    mediaSession.metadata = new window.MediaMetadata({
+      title: title || '',
+      artist: channelName || '',
+      artwork: poster
+        ? [
+            {
+              src: poster,
+              sizes: '512x512',
+              type: 'image/jpeg',
+            },
+          ]
+        : [],
+    });
+
+    const playHandler = () => {
+      const v = videoRef.current;
+      if (!v) return;
+      v
+        .play()
+        .then(() => {
+          setIsPlaying(true);
+        })
+        .catch(() => {
+          onError?.('Не удалось воспроизвести видео');
+        });
+    };
+
+    const pauseHandler = () => {
+      const v = videoRef.current;
+      if (!v) return;
+      v.pause();
+      setIsPlaying(false);
+    };
+
+    const nextHandler = () => {
+      if (!onNextVideo) return;
+      restoreFullscreenAfterSrcChangeRef.current = !!document.fullscreenElement;
+      autoPlayAfterAdvanceRef.current = true;
+      onNextVideo();
+    };
+
+    const prevHandler = () => {
+      if (!onPrevVideo) return;
+      restoreFullscreenAfterSrcChangeRef.current = !!document.fullscreenElement;
+      autoPlayAfterAdvanceRef.current = true;
+      onPrevVideo();
+    };
+
+    const seekForwardHandler = (details?: { seekOffset?: number }) => {
+      const offset = details?.seekOffset ?? SEEK_STEP;
+      seekBy(offset);
+    };
+
+    const seekBackwardHandler = (details?: { seekOffset?: number }) => {
+      const offset = details?.seekOffset ?? SEEK_STEP;
+      seekBy(-offset);
+    };
+
+    mediaSession.setActionHandler('play', playHandler);
+    mediaSession.setActionHandler('pause', pauseHandler);
+    mediaSession.setActionHandler('seekforward', seekForwardHandler);
+    mediaSession.setActionHandler('seekbackward', seekBackwardHandler);
+
+    if (onNextVideo) {
+      mediaSession.setActionHandler('nexttrack', nextHandler);
+    }
+    if (onPrevVideo) {
+      mediaSession.setActionHandler('previoustrack', prevHandler);
+    }
+
+    return () => {
+      mediaSession.setActionHandler('play', null);
+      mediaSession.setActionHandler('pause', null);
+      mediaSession.setActionHandler('seekforward', null);
+      mediaSession.setActionHandler('seekbackward', null);
+      if (onNextVideo) mediaSession.setActionHandler('nexttrack', null);
+      if (onPrevVideo) mediaSession.setActionHandler('previoustrack', null);
+    };
+  }, [title, channelName, poster, onError, onNextVideo, onPrevVideo, seekBy]);
 
   return (
     <div
@@ -588,65 +712,67 @@ export function VideoPlayer({
         onError={() => onError?.('Файл не найден или формат не поддерживается')}
       />
 
-      {/* Центральная кнопка Play/Pause: видима при controlsVisible, иконка по состоянию */}
-      <div
-        className={cn(
-          'absolute inset-0 z-20 flex items-center justify-center gap-4 transition-opacity pointer-events-none',
-          controlsVisible ? 'opacity-100' : 'opacity-0'
-        )}
-      >
-        {onPrevVideo && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              restoreFullscreenAfterSrcChangeRef.current = !!document.fullscreenElement;
-              onPrevVideo();
-              resetHideTimer();
-            }}
-            onDoubleClick={(e) => e.stopPropagation()}
-            className="w-12 h-12 rounded-full bg-black/50 flex items-center justify-center hover:bg-black/80 hover:scale-105 transition-all focus:outline-none focus:ring-2 focus:ring-white/50 pointer-events-auto"
-            aria-label="Предыдущее видео"
-          >
-            <SkipBack className="w-7 h-7 text-white" />
-          </button>
-        )}
-
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            togglePlay();
-            resetHideTimer();
-          }}
-          onDoubleClick={(e) => e.stopPropagation()}
-          className="w-[68px] h-[68px] rounded-full bg-black/60 flex items-center justify-center hover:bg-black/80 hover:scale-105 transition-all focus:outline-none focus:ring-2 focus:ring-white/50 pointer-events-auto"
-          aria-label={isPlaying ? 'Пауза' : 'Воспроизвести'}
-        >
-          {isPlaying ? (
-            <Pause className="w-10 h-10 text-white fill-white" />
-          ) : (
-            <Play className="w-10 h-10 text-white fill-white ml-1" />
+      {/* Центральная кнопка Play/Pause: в мини-плеере скрыта */}
+      {!mini && (
+        <div
+          className={cn(
+            'absolute inset-0 z-20 flex items-center justify-center gap-4 transition-opacity pointer-events-none',
+            controlsVisible ? 'opacity-100' : 'opacity-0'
           )}
-        </button>
+        >
+          {onPrevVideo && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                restoreFullscreenAfterSrcChangeRef.current = !!document.fullscreenElement;
+                onPrevVideo();
+                resetHideTimer();
+              }}
+              onDoubleClick={(e) => e.stopPropagation()}
+              className="w-12 h-12 rounded-full bg-black/50 flex items-center justify-center hover:bg-black/80 hover:scale-105 transition-all focus:outline-none focus:ring-2 focus:ring-white/50 pointer-events-auto"
+              aria-label="Предыдущее видео"
+            >
+              <SkipBack className="w-7 h-7 text-white" />
+            </button>
+          )}
 
-        {onNextVideo && (
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              restoreFullscreenAfterSrcChangeRef.current = !!document.fullscreenElement;
-              onNextVideo();
+              togglePlay();
               resetHideTimer();
             }}
             onDoubleClick={(e) => e.stopPropagation()}
-            className="w-12 h-12 rounded-full bg-black/50 flex items-center justify-center hover:bg-black/80 hover:scale-105 transition-all focus:outline-none focus:ring-2 focus:ring-white/50 pointer-events-auto"
-            aria-label="Следующее видео"
+            className="w-[68px] h-[68px] rounded-full bg-black/60 flex items-center justify-center hover:bg-black/80 hover:scale-105 transition-all focus:outline-none focus:ring-2 focus:ring-white/50 pointer-events-auto"
+            aria-label={isPlaying ? 'Пауза' : 'Воспроизвести'}
           >
-            <SkipForward className="w-7 h-7 text-white" />
+            {isPlaying ? (
+              <Pause className="w-10 h-10 text-white fill-white" />
+            ) : (
+              <Play className="w-10 h-10 text-white fill-white ml-1" />
+            )}
           </button>
-        )}
-      </div>
+
+          {onNextVideo && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                restoreFullscreenAfterSrcChangeRef.current = !!document.fullscreenElement;
+                onNextVideo();
+                resetHideTimer();
+              }}
+              onDoubleClick={(e) => e.stopPropagation()}
+              className="w-12 h-12 rounded-full bg-black/50 flex items-center justify-center hover:bg-black/80 hover:scale-105 transition-all focus:outline-none focus:ring-2 focus:ring-white/50 pointer-events-auto"
+              aria-label="Следующее видео"
+            >
+              <SkipForward className="w-7 h-7 text-white" />
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Индикатор буферизации: z-30, pointer-events-none */}
       {isBuffering && (
@@ -655,11 +781,12 @@ export function VideoPlayer({
         </div>
       )}
 
-      {/* Нижняя панель управления: pointer-events-none при скрытых контролах */}
+      {/* Нижняя панель управления: в мини-плеере не показываем, чтобы не перекрывать кнопки восстановления и закрытия */}
+      {!mini && (
       <div
         data-role="video-controls"
         className={cn(
-          'absolute bottom-0 left-0 right-0 z-20 bg-linear-to-t from-black/90 via-black/50 to-transparent pb-2 px-3 transition-opacity duration-200 pointer-events-none',
+          'absolute bottom-0 left-0 right-0 z-20 bg-linear-to-t from-black/90 via-black/50 to-transparent pb-2 px-1 transition-opacity duration-200 pointer-events-none',
           controlsVisible ? 'opacity-100' : 'opacity-0'
         )}
       >
@@ -719,9 +846,9 @@ export function VideoPlayer({
             </div>
           </div>
 
-          <span className="text-sm tabular-nums min-w-8 text-right">{formatTime(currentTime)}</span>
+          <span className="text-xs tabular-nums min-w-8 text-right">{formatTime(currentTime)}</span>
           <span className="text-white/70">/</span>
-          <span className="text-sm text-white/80 tabular-nums">{formatTime(duration)}</span>
+          <span className="text-xs text-white/80 tabular-nums">{formatTime(duration)}</span>
 
           <div className="flex-1 min-w-0" />
 
@@ -787,6 +914,41 @@ export function VideoPlayer({
             </DropdownMenuContent>
           </DropdownMenu>
 
+          {/* Мини‑плеер внизу окна */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9 text-white hover:bg-white/20 shrink-0"
+            onClick={(e) => {
+              e.stopPropagation();
+              const v = videoRef.current;
+              const wasPlaying = v ? !v.paused : isPlaying;
+              setWasFullscreenBeforeMiniplayer(!!document.fullscreenElement || isFullscreen);
+              if (document.fullscreenElement) {
+                document.exitFullscreen().catch(() => {});
+              }
+              setTrack({
+                id: src,
+                src,
+                title,
+                channelName,
+                channelId,
+                poster,
+                publishedAt,
+                chapters,
+                initialTime: currentTime,
+                autoPlay: wasPlaying,
+              });
+              setMode('miniplayer');
+              if (v) {
+                v.pause();
+              }
+            }}
+            aria-label="Мини-плеер внизу"
+          >
+            <PictureInPicture2 className="h-5 w-5" />
+          </Button>
+
           {/* Полноэкранный режим */}
           <Button
             variant="ghost"
@@ -800,11 +962,12 @@ export function VideoPlayer({
           >
             {isFullscreen ? <Minimize className="h-5 w-5" /> : <Maximize className="h-5 w-5" />}
           </Button>
+
         </div>
 
         {/* Полоса прогресса (по центру, отступ 5px от кнопок); при наличии глав — сегменты как в YouTube */}
         <div
-          className="my-[5px] h-1.5 cursor-pointer group/progress flex items-center pointer-events-auto relative"
+          className="py-[5px] pt-1 h-1.5 cursor-pointer group/progress flex items-center pointer-events-auto relative"
           onClick={handleProgressClick}
           role="slider"
           aria-valuenow={currentTime}
@@ -860,9 +1023,13 @@ export function VideoPlayer({
         </div>
 
         {/* Информационный блок (ниже, с отступом 10px от полосы прокрутки) */}
-        {(title || channelName || publishedAt) && (
+        {!mini && (title || channelName || publishedAt) && (
           <div className="mt-[10px] text-sm pointer-events-none space-y-0.5 min-w-0 [&_.channel-link]:pointer-events-auto [&_.channel-link]:cursor-pointer [&_.channel-link]:hover:underline [&_.channel-link]:focus:underline [&_.channel-link]:outline-none">
-            {title && <p className="text-white/90 truncate">{title}</p>}
+            {title && (
+              <p className="text-white/90 truncate" title={title}>
+                {isFullscreen ? title : (title.length > 75 ? `${title.slice(0, 75)}…` : title)}
+              </p>
+            )}
             {(channelName || publishedAt) && (
               <p className="text-white/60 text-xs truncate">
                 {channelId && channelName ? (
@@ -882,6 +1049,7 @@ export function VideoPlayer({
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }

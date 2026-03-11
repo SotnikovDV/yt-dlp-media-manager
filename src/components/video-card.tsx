@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
-import { Play, Video, CheckCircle, Star, Trash2, Download, ExternalLink, Share2, Eye, ListPlus, Plus } from 'lucide-react';
+import { Play, Video, CheckCircle, Star, Trash2, Download, ExternalLink, Share2, Eye, ListPlus, Plus, X } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { ShareVideoMenu } from '@/components/share-video-menu';
@@ -91,6 +91,7 @@ export interface VideoCardProps<T extends VideoCardVideo = VideoCardVideo> {
   /** Плейлисты и колбэки для кнопки «Добавить в плейлист». Если заданы, кнопка показывается вверху карточки справа от «Поделиться». */
   playlists?: PlaylistForCard[];
   onAddToPlaylist?: (playlistId: string, videoId: string) => void;
+  onRemoveFromPlaylist?: (playlistId: string, videoId: string) => void;
   onCreatePlaylistAndAdd?: (videoId: string, suggestedName?: string) => void;
   onDelete?: (videoId: string) => void;
   showFavoriteButton?: boolean;
@@ -103,6 +104,7 @@ export function VideoCard<T extends VideoCardVideo>({
   shareBaseUrl,
   playlists,
   onAddToPlaylist,
+  onRemoveFromPlaylist,
   onCreatePlaylistAndAdd,
   onDelete,
   showFavoriteButton = false,
@@ -115,11 +117,11 @@ export function VideoCard<T extends VideoCardVideo>({
 
   return (
     <Card
-      className="overflow-hidden cursor-pointer hover:shadow-lg transition-shadow group h-full flex flex-col aspect-3/4 gap-0 py-0"
+      className="overflow-hidden cursor-pointer hover:shadow-lg transition-shadow group h-full flex flex-col gap-0 py-0" /** aspect-1/2  **/
       onClick={() => onPlay(video)}
     >
       {/* Блок превью — 50% высоты карточки, картинка по центру по вертикали */}
-      <div className="relative flex-[0_0_60%] min-h-0 flex items-center justify-center bg-muted overflow-hidden">
+      <div className="relative flex-[0_0_50%] min-h-0 flex items-center justify-center bg-muted overflow-hidden">
         {/* Кнопки в правом верхнем углу — прозрачный фон, матовое стекло только при наведении */}
         <div className="absolute top-2 right-2 z-10 flex items-center gap-1.5">
           {video.platformId && (
@@ -168,7 +170,8 @@ export function VideoCard<T extends VideoCardVideo>({
                   return (
                     <DropdownMenuItem
                       key={pl.id}
-                      disabled={alreadyIn}
+                      disabled={alreadyIn && !onRemoveFromPlaylist}
+                      className="flex items-center justify-between gap-2"
                       onClick={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
@@ -177,8 +180,25 @@ export function VideoCard<T extends VideoCardVideo>({
                         onAddToPlaylist(pl.id, video.id);
                       }}
                     >
-                      {pl.name}
-                      {alreadyIn && ' ✓'}
+                      <span>
+                        {pl.name}
+                        {alreadyIn && ' ✓'}
+                      </span>
+                      {alreadyIn && onRemoveFromPlaylist && (
+                        <button
+                          type="button"
+                          title="Удалить из плейлиста"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setPlaylistMenuOpen(false);
+                            onRemoveFromPlaylist(pl.id, video.id);
+                          }}
+                          className="ml-auto flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-destructive hover:bg-destructive/10"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                     </DropdownMenuItem>
                   );
                 })}

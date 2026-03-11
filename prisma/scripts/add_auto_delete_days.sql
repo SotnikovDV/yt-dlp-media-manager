@@ -1,0 +1,1 @@
+ALTER TABLE "Subscription" ADD COLUMN autoDeleteDays INTEGER NOT NULL DEFAULT 30;

@@ -10,6 +10,9 @@ import { downloadAndSaveChannelAvatar } from '@/lib/avatars';
 import { downloadAndSaveVideoThumbnail } from '@/lib/thumbnails';
 import { checkSubscription } from '@/lib/subscription-checker';
 import { writeQueueLog } from '@/lib/queue-logger';
+import { cleanOldVideosForSubscription } from '@/lib/subscription-clean-old';
+import { getTagsForVideo } from '@/lib/read-info-chapters';
+import { syncVideoTagsFromNames } from '@/lib/sync-video-tags';
 
 const CLEANUP_TICK_INTERVAL = 20; // очистка старых completed раз в ~60 сек (tick каждые 3 сек)
 const COMPLETED_KEEP_HOURS = 24;
@@ -160,8 +163,70 @@ const SUBSCRIPTION_SCHEDULER_CONCURRENCY = 3;
 const DUE_CANDIDATES_MIN_AGE_MS = 60 * 60 * 1000; // 1 час — кандидаты для фильтрации по checkInterval
 const DUE_TAKE_LIMIT = 20;
 
+async function runAutoDeleteSubscriptions() {
+  const subs = await db.subscription.findMany({
+    where: {
+      isActive: true,
+      autoDeleteDays: { gt: 0 },
+    },
+    select: { id: true, autoDeleteDays: true, userId: true },
+    take: DUE_TAKE_LIMIT,
+  });
+
+  if (subs.length === 0) return;
+
+  let totalDeletedVideos = 0;
+  let totalDeletedTasks = 0;
+  let totalFilesRemoved = 0;
+
+  for (let i = 0; i < subs.length; i += SUBSCRIPTION_SCHEDULER_CONCURRENCY) {
+    const chunk = subs.slice(i, i + SUBSCRIPTION_SCHEDULER_CONCURRENCY);
+    const results = await Promise.allSettled(
+      chunk.map((sub) =>
+        cleanOldVideosForSubscription(sub.id, sub.autoDeleteDays, {
+          skipFavoritesForUserId: sub.userId,
+        }),
+      ),
+    );
+
+    results.forEach((res, idx) => {
+      const sub = chunk[idx];
+      if (res.status === 'fulfilled') {
+        const { deletedVideos, deletedTasks, filesRemoved } = res.value;
+        totalDeletedVideos += deletedVideos;
+        totalDeletedTasks += deletedTasks;
+        totalFilesRemoved += filesRemoved;
+        if (deletedVideos > 0 || deletedTasks > 0 || filesRemoved > 0) {
+          writeQueueLog('info', 'subscription_auto_delete', {
+            subscriptionId: sub.id,
+            autoDeleteDays: sub.autoDeleteDays,
+            deletedVideos,
+            deletedTasks,
+            filesRemoved,
+          });
+        }
+      } else {
+        writeQueueLog('error', 'subscription_auto_delete_failed', {
+          subscriptionId: sub.id,
+          autoDeleteDays: sub.autoDeleteDays,
+          error: String(res.reason),
+        });
+      }
+    });
+  }
+
+  writeQueueLog('info', 'subscription_auto_delete_batch', {
+    subscriptionsProcessed: subs.length,
+    deletedVideos: totalDeletedVideos,
+    deletedTasks: totalDeletedTasks,
+    filesRemoved: totalFilesRemoved,
+  });
+}
+
 async function runSubscriptionScheduler() {
   if (!env.subscriptionAutoCheckEnabled()) return;
+
+  await runAutoDeleteSubscriptions();
 
   const activeCount = await db.downloadTask.count({
     where: { status: { in: ['downloading', 'processing'] } },
@@ -397,6 +462,25 @@ async function tick() {
                   where: { id: videoId },
                   data: { filePath: pathToStore, downloadedAt: completedAt },
                 });
+              }
+              // Синхронизация тегов из .info.json в БД (Tag, VideoTag)
+              try {
+                const video = await db.video.findUnique({
+                  where: { id: videoId },
+                  select: { filePath: true, platformId: true },
+                });
+                if (video?.filePath) {
+                  const tags = await getTagsForVideo(
+                    { platformId: video.platformId, filePath: video.filePath },
+                    getDownloadPathAsync
+                  );
+                  if (tags.length > 0) {
+                    await syncVideoTagsFromNames(videoId, tags);
+                  }
+                }
+              } catch (tagErr) {
+                // не ломаем завершение задачи при ошибке синхронизации тегов
+                writeQueueLog('warn', 'sync-tags-failed', { taskId: task.id, videoId, error: String((tagErr as Error).message) });
               }
             }
             writeQueueLog('info', 'completed', { taskId: task.id, filePath: pathToStore });

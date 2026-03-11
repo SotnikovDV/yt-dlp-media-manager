@@ -22,6 +22,7 @@ export async function GET(request: NextRequest) {
     const search = searchParams.get('search') || '';
     const channelId = searchParams.get('channelId') || '';
     const categoryId = searchParams.get('categoryId') || '';
+    const tagId = searchParams.get('tagId') || '';
     const quality = searchParams.get('quality') || '';
     const sort = searchParams.get('sort') || 'downloadedAt';
 
@@ -139,6 +140,10 @@ export async function GET(request: NextRequest) {
         { title: { contains: search } },
         { description: { contains: search } }
       ];
+    }
+
+    if (tagId) {
+      where.videoTags = { some: { tagId } };
     }
 
     if (quality) {

@@ -12,7 +12,8 @@ export type PlaybackQueuePredefined =
   | { kind: 'subscriptionCategory'; categoryId: string | null }
   | { kind: 'channel'; channelId: string }
   | { kind: 'library' } // пагинированный список медиатеки (поиск или все подписки)
-  | { kind: 'individualVideos' }; // секция «Отдельные видео»
+  | { kind: 'individualVideos' } // секция «Отдельные видео»
+  | { kind: 'queue' }; // очередь загрузок (завершённые с видео)
 
 /** Пользовательская очередь (плейлист в БД). */
 export type PlaybackQueueCustom = { kind: 'custom'; playlistId: string };

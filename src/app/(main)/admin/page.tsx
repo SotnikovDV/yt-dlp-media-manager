@@ -91,6 +91,21 @@ async function backfillAvatarsThumbnails(): Promise<BackfillResult> {
   return json;
 }
 
+type SyncVideoTagsResult = {
+  processed: number;
+  totalAdded: number;
+  totalRemoved: number;
+  failed: number;
+  total: number;
+};
+
+async function syncVideoTags(): Promise<SyncVideoTagsResult> {
+  const res = await fetch('/api/admin/sync-video-tags', { method: 'POST' });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`);
+  return json;
+}
+
 type CategoryRow = {
   id: string;
   name: string;
@@ -204,6 +219,27 @@ export default function AdminPage() {
     },
   });
 
+  const syncVideoTagsMutation = useMutation({
+    mutationFn: syncVideoTags,
+    onSuccess: (data) => {
+      const parts: [
+        `Обработано: ${number} из ${number}`,
+        string?,
+        string?,
+      ] = [`Обработано: ${data.processed} из ${data.total}`];
+      if (data.totalAdded > 0 || data.totalRemoved > 0) {
+        parts.push(`добавлено связей: ${data.totalAdded}, удалено: ${data.totalRemoved}`);
+      }
+      if (data.failed > 0) {
+        parts.push(`ошибок: ${data.failed}`);
+      }
+      toast.success(parts.filter(Boolean).join('. '));
+    },
+    onError: (e: Error) => {
+      toast.error(e.message);
+    },
+  });
+
   const { data: categories, isLoading: categoriesLoading } = useQuery({
     queryKey: ['admin', 'subscription-categories'],
     queryFn: fetchCategories,
@@ -293,7 +329,7 @@ export default function AdminPage() {
   const filteredUsers = filterPending && users ? users.filter((u) => !u.isAllowed) : users ?? [];
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
+    <div className="max-w-4xl mx-auto space-y-6 lg:py-6">
       <div>
         <h1 className="text-2xl font-bold flex items-center gap-2">
           <Shield className="h-6 w-6" />
@@ -528,6 +564,32 @@ export default function AdminPage() {
                 <ImageIcon className="mr-2 h-4 w-4" />
               )}
               Докачать аватары и превью
+            </Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Tag className="h-5 w-5" />
+              Теги видео
+            </CardTitle>
+            <CardDescription>
+              Проставить теги для уже скачанных видео: для каждого видео с файлом читается .info.json (yt-dlp), из поля tags заполняются таблицы Tag и VideoTag. Подходит для массового обновления после появления тегов в архиве.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button
+              variant="outline"
+              onClick={() => syncVideoTagsMutation.mutate()}
+              disabled={syncVideoTagsMutation.isPending}
+            >
+              {syncVideoTagsMutation.isPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Tag className="mr-2 h-4 w-4" />
+              )}
+              Проставить теги для всех скачанных видео
             </Button>
           </CardContent>
         </Card>

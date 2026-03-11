@@ -115,6 +115,7 @@ export async function POST(request: NextRequest) {
       outputFolder,
       checkInterval = env.defaultCheckInterval(),
       categoryId,
+      autoDeleteDays,
     } = body;
 
     if (!channelUrl) {
@@ -125,6 +126,10 @@ export async function POST(request: NextRequest) {
     const defaultQuality = env.defaultQuality();
     const effectiveDays = toInt(downloadDays, defaultDays);
     const effectiveQuality = (preferredQuality ?? defaultQuality ?? 'best').toString();
+
+    const allowedAutoDeleteValues = [0, 7, 14, 30, 60, 90];
+    const rawAutoDelete = toInt(autoDeleteDays, 30);
+    const effectiveAutoDeleteDays = allowedAutoDeleteValues.includes(rawAutoDelete) ? rawAutoDelete : 30;
 
     // Динамический импорт для избежания проблем
     const { getChannelInfo } = await import('@/lib/ytdlp');
@@ -191,6 +196,7 @@ export async function POST(request: NextRequest) {
         userId: session.user.id,
         channelId: channel.id,
         downloadDays: effectiveDays,
+        autoDeleteDays: effectiveAutoDeleteDays,
         preferredQuality: effectiveQuality,
         outputFolder,
         checkInterval,

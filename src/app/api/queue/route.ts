@@ -105,6 +105,9 @@ async function fetchQueueData() {
     include: {
       video: {
         include: { channel: true }
+      },
+      subscription: {
+        select: { channel: { select: { id: true, name: true } } }
       }
     },
     orderBy: [
@@ -120,6 +123,9 @@ async function fetchQueueData() {
     include: {
       video: {
         include: { channel: true }
+      },
+      subscription: {
+        select: { channel: { select: { id: true, name: true } } }
       }
     },
     orderBy: { completedAt: 'desc' },

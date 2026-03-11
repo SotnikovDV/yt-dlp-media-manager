@@ -53,7 +53,7 @@ export async function PUT(
 
     const { id } = await params;
     const body = await request.json();
-    const { downloadDays, preferredQuality, outputFolder, checkInterval, isActive, categoryId } = body;
+    const { downloadDays, preferredQuality, outputFolder, checkInterval, isActive, categoryId, autoDeleteDays } = body;
 
     const existing = await db.subscription.findFirst({
       where: { id, userId: session.user.id }
@@ -67,6 +67,10 @@ export async function PUT(
       checkInterval,
       isActive,
     };
+    if (typeof autoDeleteDays === 'number') {
+      const n = Math.max(0, Math.floor(autoDeleteDays));
+      data.autoDeleteDays = n;
+    }
     if (categoryId !== undefined) data.categoryId = categoryId || null;
 
     const subscription = await db.subscription.update({

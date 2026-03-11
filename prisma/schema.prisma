@@ -133,6 +133,7 @@ model Subscription {
   category         SubscriptionCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   categoryId      String?
   downloadDays     Int      @default(30)
+  autoDeleteDays   Int      @default(30)
   preferredQuality String?  @default("best")
   outputFolder     String?
   isActive         Boolean  @default(true)
