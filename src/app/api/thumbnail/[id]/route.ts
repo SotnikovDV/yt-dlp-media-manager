@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
 import { existsSync, createReadStream } from 'fs';
 import { Readable } from 'stream';
@@ -31,6 +33,7 @@ function contentTypeFromExt(ext: string): string {
 /**
  * GET /api/thumbnail/[id] — превью из локального файла или прокси с YouTube.
  * Приоритет: thumbnailPath (локальный кэш) → превью рядом с видео (yt-dlp) → прокси thumbnailUrl.
+ * Для неавторизованных: доступно только для видео в расшаренных плейлистах.
  */
 export async function GET(
   request: NextRequest,
@@ -43,6 +46,20 @@ export async function GET(
 
     if (!video) {
       return NextResponse.json({ error: 'Video not found' }, { status: 404 });
+    }
+
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      // Неавторизован: только для видео в расшаренных плейлистах
+      const inSharedPlaylist = await db.playlistVideo.findFirst({
+        where: {
+          videoId: video.id,
+          playlist: { shareEnabled: true },
+        },
+      });
+      if (!inSharedPlaylist) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      }
     }
 
     // 0. Локальный кэш по thumbnailPath (для ещё не скачанных и уже сохранённых превью)

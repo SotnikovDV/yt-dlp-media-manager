@@ -18,7 +18,7 @@ export async function GET(request: NextRequest) {
     const pageRaw = parseInt(searchParams.get('page') || '1');
     const limitRaw = parseInt(searchParams.get('limit') || '20');
     const page = Number.isFinite(pageRaw) && pageRaw > 0 ? pageRaw : 1;
-    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 100) : 20;
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 500) : 20;
     const search = searchParams.get('search') || '';
     const channelId = searchParams.get('channelId') || '';
     const categoryId = searchParams.get('categoryId') || '';

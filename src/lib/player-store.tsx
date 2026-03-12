@@ -7,6 +7,10 @@ export type PlayerMode = 'embedded' | 'miniplayer' | 'fullscreen';
 export interface GlobalPlayerTrack {
   id: string;
   src: string;
+  /** Полный URL/путь к видео-файлу (.mp4). Если не задан, используется src. */
+  videoSrc?: string;
+  /** Полный URL/путь к аудио-файлу (например, .webp с аудио). */
+  audioSrc?: string;
   title: string;
   channelName?: string;
   channelId?: string;
@@ -17,6 +21,8 @@ export interface GlobalPlayerTrack {
   initialTime?: number;
   /** Автовоспроизвести трек при монтировании (например, после выноса в мини-плеер) */
   autoPlay?: boolean;
+  /** Текущий режим воспроизведения в глобальном плеере */
+  playbackKind?: 'video' | 'audio';
 }
 
 export interface GlobalPlayerState {
@@ -33,6 +39,7 @@ export type GlobalPlayerActions = {
   setWasFullscreenBeforeMiniplayer: (value: boolean) => void;
   updateInitialTime: (time: number) => void;
   setAutoPlay: (value: boolean) => void;
+  setPlaybackKind: (value: 'video' | 'audio') => void;
 };
 
 const PlayerStateContext = createContext<GlobalPlayerState | undefined>(undefined);
@@ -101,6 +108,19 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const setPlaybackKind = useCallback((value: 'video' | 'audio') => {
+    setState((prev) => {
+      if (!prev.currentTrack) return prev;
+      return {
+        ...prev,
+        currentTrack: {
+          ...prev.currentTrack,
+          playbackKind: value,
+        },
+      };
+    });
+  }, []);
+
   const actions = useMemo<GlobalPlayerActions>(
     () => ({
       setTrack,
@@ -109,8 +129,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       setWasFullscreenBeforeMiniplayer,
       updateInitialTime,
       setAutoPlay,
+      setPlaybackKind,
     }),
-    [setTrack, clear, setMode, setWasFullscreenBeforeMiniplayer, updateInitialTime, setAutoPlay]
+    [setTrack, clear, setMode, setWasFullscreenBeforeMiniplayer, updateInitialTime, setAutoPlay, setPlaybackKind]
   );
 
   return (

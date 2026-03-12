@@ -64,13 +64,15 @@ model Video {
 }
 
 model Playlist {
-  id        String   @id @default(cuid())
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId   String
-  name     String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  videos   PlaylistVideo[]
+  id          String   @id @default(cuid())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+  name        String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  videos      PlaylistVideo[]
+  shareToken  String?  @unique
+  shareEnabled Boolean  @default(false)
 
   @@index([userId])
 }

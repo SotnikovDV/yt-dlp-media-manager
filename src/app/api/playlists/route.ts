@@ -27,6 +27,8 @@ export async function GET() {
       name: p.name,
       createdAt: p.createdAt,
       videoIds: p.videos.map((v) => v.videoId),
+      shareEnabled: p.shareEnabled,
+      shareToken: p.shareToken,
     }));
 
     return NextResponse.json(jsonSafe({ playlists: result }));
@@ -75,6 +77,8 @@ export async function POST(request: NextRequest) {
       name: playlist.name,
       createdAt: playlist.createdAt,
       videoIds: playlist.videos.map((v) => v.videoId),
+      shareEnabled: playlist.shareEnabled,
+      shareToken: playlist.shareToken,
     };
 
     return NextResponse.json(jsonSafe(result));

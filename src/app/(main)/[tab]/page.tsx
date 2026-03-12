@@ -17,7 +17,7 @@ import {
   Play, Pause, Download as DownloadIcon, RefreshCw, Folder,
   Youtube, HardDrive, Clock, CheckCircle, XCircle, Loader2,
   Menu, X, ExternalLink, ChevronDown, ChevronUp, FolderOpen, FolderMinus, AlertTriangle,
-  Rss, Pencil, LogOut, User, Shield, Copy, Star, CalendarClock, ListPlus
+  Rss, Pencil, LogOut, User, Shield, Copy, Star, CalendarClock, ListPlus, Share2
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -61,7 +61,10 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { VideoPlayer } from '@/components/video-player';
+import { DndContext, type DragEndEvent, rectIntersection, useSensors, useSensor, PointerSensor, KeyboardSensor } from '@dnd-kit/core';
+import { SortableContext, arrayMove, rectSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { VideoCard, type VideoCardVideo } from '@/components/video-card';
+import { SortableVideoCard } from '@/components/sortable-video-card';
 import { ShareVideoMenu } from '@/components/share-video-menu';
 import {
   Pagination,
@@ -115,6 +118,8 @@ interface PlaylistType {
   name: string;
   createdAt: string;
   videoIds: string[];
+  shareEnabled?: boolean;
+  shareToken?: string | null;
 }
 
 /** Подписка на канал: настройки загрузки, категория, канал. */
@@ -320,9 +325,10 @@ const api = {
       });
       return jsonOrThrow(res);
     },
-    byIds: async (ids: string[]) => {
+    byIds: async (ids: string[], opts?: { limit?: number }) => {
       if (ids.length === 0) return { videos: [] as VideoType[], pagination: null };
-      const res = await fetch(`/api/videos?ids=${ids.map((id) => encodeURIComponent(id)).join(',')}`);
+      const limitParam = opts?.limit != null ? `&limit=${opts.limit}` : '';
+      const res = await fetch(`/api/videos?ids=${ids.map((id) => encodeURIComponent(id)).join(',')}${limitParam}`);
       return res.json();
     },
   },
@@ -349,6 +355,25 @@ const api = {
     },
     delete: async (id: string): Promise<void> => {
       const res = await fetch(`/api/playlists/${id}`, { method: 'DELETE' });
+      return jsonOrThrow(res);
+    },
+    share: async (
+      id: string,
+      action: 'get' | 'enable' | 'regenerate' | 'disable'
+    ): Promise<{ id: string; shareEnabled: boolean; shareToken: string | null; shareUrl: string | null }> => {
+      const res = await fetch(`/api/playlists/${id}/share`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      return jsonOrThrow(res);
+    },
+    copyByToken: async (token: string) => {
+      const res = await fetch('/api/playlists/copy-by-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      });
       return jsonOrThrow(res);
     },
   },
@@ -1025,6 +1050,10 @@ function MediaManagerContent() {
 
   // Плейлисты (БД, только для авторизованных)
   const [expandedPlaylistId, setExpandedPlaylistId] = useState<string | null>(null);
+  const [shareDialogPlaylistId, setShareDialogPlaylistId] = useState<string | null>(null);
+  const [shareDialogUrl, setShareDialogUrl] = useState<string | null>(null);
+  const [shareDialogEnabled, setShareDialogEnabled] = useState(false);
+  const [shareDialogOpen, setShareDialogOpen] = useState(false);
   const { data: playlistsData } = useQuery({
     queryKey: ['playlists'],
     queryFn: () => api.playlists.list(),
@@ -1069,6 +1098,79 @@ function MediaManagerContent() {
     [playlists, queryClient]
   );
 
+  const sortableSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
+
+  const handlePlaylistDragEnd = useCallback(
+    (playlistId: string) => (e: DragEndEvent) => {
+      const { active, over } = e;
+      if (!over || active.id === over.id) return;
+      const pl = playlists.find((p) => p.id === playlistId);
+      if (!pl) return;
+      const oldIndex = pl.videoIds.indexOf(active.id as string);
+      const newIndex = pl.videoIds.indexOf(over.id as string);
+      if (oldIndex === -1 || newIndex === -1) return;
+      const newOrder = arrayMove([...pl.videoIds], oldIndex, newIndex);
+
+      // Оптимистичное обновление сразу при отпускании (до ответа API), чтобы карточка не «возвращалась»
+      // 1. Обновляем playlists
+      queryClient.setQueryData(
+        ['playlists'],
+        (old: { playlists: PlaylistType[] } | undefined) => {
+          if (!old) return old;
+          return {
+            playlists: old.playlists.map((p) =>
+              p.id === playlistId ? { ...p, videoIds: newOrder } : p
+            ),
+          };
+        }
+      );
+      // 2. Мгновенно перестраиваем кэш playlist-videos (точный ключ для развёрнутого плейлиста)
+      const plVideosKey: [string, string, number] = ['playlist-videos', playlistId, pl.videoIds.length];
+      const plVideosData = queryClient.getQueryData<{ videos: VideoType[]; pagination?: unknown }>(plVideosKey);
+      if (plVideosData?.videos?.length) {
+        const reordered = newOrder
+          .map((id) => plVideosData.videos.find((v: VideoType) => v.id === id))
+          .filter(Boolean) as VideoType[];
+        if (reordered.length === plVideosData.videos.length) {
+          queryClient.setQueryData(plVideosKey, { ...plVideosData, videos: reordered });
+        }
+      }
+      // 3. Мгновенно обновляем кэш videos для страницы полного плейлиста
+      queryClient.setQueriesData<{ videos: VideoType[]; pagination?: unknown }>(
+        { queryKey: ['videos'], exact: false },
+        (old) => {
+          if (!old?.videos?.length) return old;
+          const reordered = newOrder
+            .map((id) => old.videos.find((v: VideoType) => v.id === id))
+            .filter(Boolean) as VideoType[];
+          if (reordered.length !== old.videos.length) return old;
+          return { ...old, videos: reordered };
+        }
+      );
+      toast.success('Порядок видео обновлён');
+
+      api.playlists
+        .update(playlistId, { videoIds: newOrder })
+        .catch((err) => {
+          console.error(err);
+          toast.error('Не удалось изменить порядок');
+          // Откат при ошибке
+          queryClient.invalidateQueries({ queryKey: ['playlists'] });
+          queryClient.invalidateQueries({ queryKey: ['playlist-videos'] });
+          queryClient.invalidateQueries({ queryKey: ['videos'] });
+        });
+    },
+    [playlists, queryClient]
+  );
+
+  const playlistSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
+
   // Состояние подтверждений: удаление видео/подписки, очистка видео, удаление старых по дням
   const [deleteVideoId, setDeleteVideoId] = useState<string | null>(null);
   const [deleteSubscriptionId, setDeleteSubscriptionId] = useState<string | null>(null);
@@ -1105,11 +1207,12 @@ function MediaManagerContent() {
     queryKey: ['videos', searchQuery, librarySelectedChannelId, libraryOpenedCategoryKey, libraryOpenedPlaylistId, libraryOpenedFavorites, librarySelectedTagId, libraryVideosPage, openedPlaylist?.videoIds?.length ?? 0],
     queryFn: () => {
       if (libraryOpenedPlaylistId && openedPlaylist?.videoIds?.length) {
+        const total = openedPlaylist.videoIds.length;
+        const limit = Math.min(total, 500);
         return api.videos.list({
-          page: libraryVideosPage,
-          limit: 24,
+          page: 1,
+          limit,
           ids: openedPlaylist.videoIds,
-          sort: 'downloadedAt',
         });
       }
       return api.videos.list({
@@ -1213,13 +1316,12 @@ function MediaManagerContent() {
     queryFn: api.subscriptions.list,
   });
 
-  const libraryRecentLimit = sectionsData?.recentLimit ?? 6;
   const { data: playlistVideosData } = useQuery({
-    queryKey: ['playlist-videos', expandedPlaylistId, libraryRecentLimit],
+    queryKey: ['playlist-videos', expandedPlaylistId, playlists.find((p) => p.id === expandedPlaylistId)?.videoIds?.length ?? 0],
     queryFn: async () => {
       const pl = playlists.find((p) => p.id === expandedPlaylistId);
       if (!pl || pl.videoIds.length === 0) return { videos: [] as VideoType[] };
-      return api.videos.byIds(pl.videoIds.slice(0, libraryRecentLimit));
+      return api.videos.byIds(pl.videoIds, { limit: Math.min(pl.videoIds.length, 500) });
     },
     enabled: !!expandedPlaylistId && playlists.some((p) => p.id === expandedPlaylistId),
   });
@@ -2030,39 +2132,76 @@ function MediaManagerContent() {
                     </div>
                   ) : videosData?.videos?.length > 0 ? (
                     <>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                        {videosData.videos.map((video: VideoType, idx: number) => (
-                          <VideoCard
-                            key={video.id}
-                            video={video as VideoCardVideo}
-                            onPlay={(v) =>
-                              openVideoInQueue(
-                                v as VideoType,
-                                libraryOpenedFavorites
-                                  ? { kind: 'favorites' }
-                                  : librarySelectedChannelId
-                                    ? { kind: 'channel', channelId: librarySelectedChannelId }
-                                    : libraryOpenedCategoryKey != null
-                                      ? { kind: 'subscriptionCategory', categoryId: libraryOpenedCategoryKey === '__none__' ? null : libraryOpenedCategoryKey }
-                                      : libraryOpenedPlaylistId
-                                        ? { kind: 'custom', playlistId: libraryOpenedPlaylistId }
+                      {libraryOpenedPlaylistId && openedPlaylist ? (
+                        <DndContext
+                          sensors={playlistSensors}
+                          collisionDetection={rectIntersection}
+                          onDragEnd={handlePlaylistDragEnd(libraryOpenedPlaylistId)}
+                        >
+                          <SortableContext
+                            items={videosData.videos.map((v: VideoType) => v.id)}
+                            strategy={rectSortingStrategy}
+                          >
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                              {videosData.videos.map((video: VideoType, idx: number) => (
+                                <SortableVideoCard
+                                  key={video.id}
+                                  id={video.id}
+                                  video={video as VideoCardVideo}
+                                  onPlay={(v) =>
+                                    openVideoInQueue(
+                                      v as VideoType,
+                                      { kind: 'custom', playlistId: libraryOpenedPlaylistId },
+                                      videosData.videos,
+                                      idx
+                                    )
+                                  }
+                                  onFavorite={session?.user ? (v, isFav) => favoriteMutation.mutate({ id: v.id, isFavorite: isFav }) : undefined}
+                                  showFavoriteButton={!!session?.user}
+                                  shareBaseUrl={(stats as StatsType)?.baseUrl ?? (typeof window !== 'undefined' ? window.location.origin : '')}
+                                  playlists={session?.user ? playlists : undefined}
+                                  onAddToPlaylist={session?.user ? handleAddVideoToPlaylist : undefined}
+                                  onRemoveFromPlaylist={session?.user ? handleRemoveVideoFromPlaylist : undefined}
+                                  onCreatePlaylistAndAdd={session?.user ? handleCreatePlaylistAndAddVideo : undefined}
+                                  onDelete={(id) => setDeleteVideoId(id)}
+                                />
+                              ))}
+                            </div>
+                          </SortableContext>
+                        </DndContext>
+                      ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                          {videosData.videos.map((video: VideoType, idx: number) => (
+                            <VideoCard
+                              key={video.id}
+                              video={video as VideoCardVideo}
+                              onPlay={(v) =>
+                                openVideoInQueue(
+                                  v as VideoType,
+                                  libraryOpenedFavorites
+                                    ? { kind: 'favorites' }
+                                    : librarySelectedChannelId
+                                      ? { kind: 'channel', channelId: librarySelectedChannelId }
+                                      : libraryOpenedCategoryKey != null
+                                        ? { kind: 'subscriptionCategory', categoryId: libraryOpenedCategoryKey === '__none__' ? null : libraryOpenedCategoryKey }
                                         : { kind: 'library' },
-                                videosData.videos,
-                                idx
-                              )
-                            }
-                            onFavorite={session?.user ? (v, isFav) => favoriteMutation.mutate({ id: v.id, isFavorite: isFav }) : undefined}
-                            showFavoriteButton={!!session?.user}
-                            shareBaseUrl={(stats as StatsType)?.baseUrl ?? (typeof window !== 'undefined' ? window.location.origin : '')}
-                            playlists={session?.user ? playlists : undefined}
-                            onAddToPlaylist={session?.user ? handleAddVideoToPlaylist : undefined}
-                            onRemoveFromPlaylist={session?.user ? handleRemoveVideoFromPlaylist : undefined}
-                            onCreatePlaylistAndAdd={session?.user ? handleCreatePlaylistAndAddVideo : undefined}
-                            onDelete={(id) => setDeleteVideoId(id)}
-                          />
-                        ))}
-                      </div>
-                      {videosData?.pagination && videosData.pagination.totalPages > 1 && (
+                                  videosData.videos,
+                                  idx
+                                )
+                              }
+                              onFavorite={session?.user ? (v, isFav) => favoriteMutation.mutate({ id: v.id, isFavorite: isFav }) : undefined}
+                              showFavoriteButton={!!session?.user}
+                              shareBaseUrl={(stats as StatsType)?.baseUrl ?? (typeof window !== 'undefined' ? window.location.origin : '')}
+                              playlists={session?.user ? playlists : undefined}
+                              onAddToPlaylist={session?.user ? handleAddVideoToPlaylist : undefined}
+                              onRemoveFromPlaylist={session?.user ? handleRemoveVideoFromPlaylist : undefined}
+                              onCreatePlaylistAndAdd={session?.user ? handleCreatePlaylistAndAddVideo : undefined}
+                              onDelete={(id) => setDeleteVideoId(id)}
+                            />
+                          ))}
+                        </div>
+                      )}
+                      {videosData?.pagination && videosData.pagination.totalPages > 1 && !libraryOpenedPlaylistId && (
                         <div className="mt-6 flex flex-col items-center gap-2">
                           <p className="text-sm text-muted-foreground">
                             Страница {videosData.pagination.page} из {videosData.pagination.totalPages}
@@ -2540,18 +2679,42 @@ function MediaManagerContent() {
                   {/* Отдельные видео — внизу, с возможностью свернуть/развернуть */}
                   {(sectionsData?.individualVideos?.length ?? 0) > 0 && (
                     <section>
-                      <button
-                        type="button"
-                        onClick={() => setSectionCollapsed('libraryIndividualVideos', !sectionsCollapsed.libraryIndividualVideos)}
-                        className="flex items-center gap-2 w-full text-left mb-3 group cursor-pointer"
-                      >
-                        {sectionsCollapsed.libraryIndividualVideos ? (
-                          <ChevronDown className="h-5 w-5 text-muted-foreground shrink-0" />
-                        ) : (
-                          <ChevronUp className="h-5 w-5 text-muted-foreground shrink-0" />
-                        )}
-                        <h2 className="text-lg font-semibold group-hover:opacity-80">Отдельные видео</h2>
-                      </button>
+                      <div className="flex items-center gap-2 mb-3">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSectionCollapsed('libraryIndividualVideos', !sectionsCollapsed.libraryIndividualVideos)
+                          }
+                          className="flex items-center gap-2 flex-1 min-w-0 text-left group cursor-pointer"
+                        >
+                          {sectionsCollapsed.libraryIndividualVideos ? (
+                            <ChevronDown className="h-5 w-5 text-muted-foreground shrink-0" />
+                          ) : (
+                            <ChevronUp className="h-5 w-5 text-muted-foreground shrink-0" />
+                          )}
+                          <h2 className="text-lg font-semibold group-hover:opacity-80">Отдельные видео</h2>
+                        </button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          title="Открыть подборку"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setLibraryOpenedCategoryKey(null);
+                            setLibraryOpenedPlaylistId(null);
+                            setLibraryOpenedFavorites(false);
+                            setLibrarySelectedTagId(null);
+                            setSearchQuery('');
+                            setLibrarySelectedChannelId(LIBRARY_INDIVIDUAL_CHANNEL_ID);
+                            const params = new URLSearchParams();
+                            params.set('channelId', LIBRARY_INDIVIDUAL_CHANNEL_ID);
+                            router.replace(`/library?${params.toString()}`);
+                          }}
+                        >
+                          <FolderOpen className="h-4 w-4 mr-1" />
+                        </Button>
+                        <span className="w-10" />
+                      </div>
                       {!sectionsCollapsed.libraryIndividualVideos && (
                         <>
                           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -2630,6 +2793,37 @@ function MediaManagerContent() {
                                 <Button
                                   size="sm"
                                   variant="ghost"
+                                  title="Поделиться плейлистом"
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    try {
+                                      const baseUrl =
+                                        (stats as StatsType)?.baseUrl ??
+                                        (typeof window !== 'undefined' ? window.location.origin : '');
+                                      const res = await api.playlists.share(pl.id, 'get');
+                                      const enabled = !!res.shareEnabled;
+                                      const url =
+                                        res.shareToken
+                                          ? res.shareUrl ??
+                                            `${baseUrl.replace(/\/+$/, '')}/playlist/shared/${res.shareToken}`
+                                          : null;
+                                      setShareDialogPlaylistId(pl.id);
+                                      setShareDialogUrl(url);
+                                      setShareDialogEnabled(enabled);
+                                      setShareDialogOpen(true);
+                                    } catch (err) {
+                                      console.error(err);
+                                      toast.error('Не удалось обновить настройки доступа плейлиста');
+                                    }
+                                  }}
+                                >
+                                  <Share2
+                                    className={cn('h-4 w-4 mr-1', pl.shareEnabled && 'text-primary')}
+                                  />
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
                                   title="Открыть подборку"
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -2667,32 +2861,44 @@ function MediaManagerContent() {
                                   {pl.videoIds.length === 0 ? (
                                     <p className="text-sm text-muted-foreground">Плейлист пуст. Добавьте видео через кнопку «Добавить в плейлист» в плеере.</p>
                                   ) : (
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
-                                      {playlistVideos.length === 0 ? (
-                                        <div className="flex items-center gap-2 text-muted-foreground">
-                                          <Loader2 className="h-5 w-5 animate-spin" />
-                                          <span className="text-sm">Загрузка...</span>
+                                    <DndContext
+                                      sensors={playlistSensors}
+                                      collisionDetection={rectIntersection}
+                                      onDragEnd={handlePlaylistDragEnd(pl.id)}
+                                    >
+                                      <SortableContext
+                                        items={playlistVideos.map((v) => v.id)}
+                                        strategy={rectSortingStrategy}
+                                      >
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
+                                          {playlistVideos.length === 0 ? (
+                                            <div className="flex items-center gap-2 text-muted-foreground">
+                                              <Loader2 className="h-5 w-5 animate-spin" />
+                                              <span className="text-sm">Загрузка...</span>
+                                            </div>
+                                          ) : (
+                                            playlistVideos.map((video: VideoType, idx: number) => (
+                                              <SortableVideoCard
+                                                key={video.id}
+                                                id={video.id}
+                                                video={video as VideoCardVideo}
+                                                onPlay={(v) =>
+                                                  openVideoInQueue(v as VideoType, { kind: 'custom', playlistId: pl.id }, playlistVideos, idx)
+                                                }
+                                                onFavorite={session?.user ? (v, isFav) => favoriteMutation.mutate({ id: v.id, isFavorite: isFav }) : undefined}
+                                                showFavoriteButton={!!session?.user}
+                                                shareBaseUrl={(stats as StatsType)?.baseUrl ?? (typeof window !== 'undefined' ? window.location.origin : '')}
+                                                playlists={session?.user ? playlists : undefined}
+                                                onAddToPlaylist={session?.user ? handleAddVideoToPlaylist : undefined}
+                                                onRemoveFromPlaylist={session?.user ? handleRemoveVideoFromPlaylist : undefined}
+                                                onCreatePlaylistAndAdd={session?.user ? handleCreatePlaylistAndAddVideo : undefined}
+                                                onDelete={(id) => setDeleteVideoId(id)}
+                                              />
+                                            ))
+                                          )}
                                         </div>
-                                      ) : (
-                                        playlistVideos.map((video: VideoType, idx: number) => (
-                                          <VideoCard
-                                            key={video.id}
-                                            video={video as VideoCardVideo}
-                                            onPlay={(v) =>
-                                              openVideoInQueue(v as VideoType, { kind: 'custom', playlistId: pl.id }, playlistVideos, idx)
-                                            }
-                                            onFavorite={session?.user ? (v, isFav) => favoriteMutation.mutate({ id: v.id, isFavorite: isFav }) : undefined}
-                                            showFavoriteButton={!!session?.user}
-                                            shareBaseUrl={(stats as StatsType)?.baseUrl ?? (typeof window !== 'undefined' ? window.location.origin : '')}
-                                            playlists={session?.user ? playlists : undefined}
-                                            onAddToPlaylist={session?.user ? handleAddVideoToPlaylist : undefined}
-                                            onRemoveFromPlaylist={session?.user ? handleRemoveVideoFromPlaylist : undefined}
-                                            onCreatePlaylistAndAdd={session?.user ? handleCreatePlaylistAndAddVideo : undefined}
-                                            onDelete={(id) => setDeleteVideoId(id)}
-                                          />
-                                        ))
-                                      )}
-                                    </div>
+                                      </SortableContext>
+                                    </DndContext>
                                   )}
                                   <div className="mt-4 flex justify-center">
                                     <Button variant="outline" size="sm" className="text-muted-foreground border-border/70" onClick={() => setExpandedPlaylistId(null)}>
@@ -4100,6 +4306,11 @@ function MediaManagerContent() {
                       title={playingVideo.title}
                       channelName={playingVideo.channel?.name ?? undefined}
                       channelId={playingVideo.channel?.id ?? undefined}
+                      poster={
+                        (playingVideo.filePath || playingVideo.thumbnailUrl)
+                          ? `/api/thumbnail/${playingVideo.id}`
+                          : undefined
+                      }
                       publishedAt={playingVideo.publishedAt ?? undefined}
                       initialTime={
                         currentTrack && currentTrack.id === `/api/stream/${playingVideo.id}`
@@ -4667,6 +4878,154 @@ function MediaManagerContent() {
               Удалить
             </AlertDialogAction>
           </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Диалог шаринга плейлиста */}
+      <AlertDialog
+        open={shareDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            setShareDialogOpen(false);
+          }
+        }}
+      >
+        <AlertDialogContent className="sm:max-w-lg w-[calc(100%-2rem)] overflow-hidden">
+          <AlertDialogHeader className="text-left">
+            <AlertDialogTitle>Доступ к плейлисту по ссылке</AlertDialogTitle>
+            <AlertDialogDescription>
+              Скопируйте ссылку ниже и отправьте её тем, с кем хотите поделиться плейлистом. По ссылке можно только
+              просматривать и воспроизводить видео, без редактирования.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-4 min-w-0 overflow-hidden">
+            {shareDialogEnabled ? (
+              shareDialogUrl ? (
+                <>
+                  <div className="flex items-center gap-2 min-w-0 rounded-md border bg-muted px-3 py-2.5">
+                    <span className="flex-1 min-w-0 truncate text-sm select-all">
+                      {shareDialogUrl}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 shrink-0 flex-shrink-0"
+                      title="Обновить ссылку"
+                      onClick={async () => {
+                        if (!shareDialogPlaylistId) return;
+                        try {
+                          const baseUrl =
+                            (stats as StatsType)?.baseUrl ??
+                            (typeof window !== 'undefined' ? window.location.origin : '');
+                          const res = await api.playlists.share(shareDialogPlaylistId, 'regenerate');
+                          const url =
+                            res.shareToken
+                              ? res.shareUrl ??
+                                `${baseUrl.replace(/\/+$/, '')}/playlist/shared/${res.shareToken}`
+                              : null;
+                          setShareDialogEnabled(!!res.shareEnabled);
+                          setShareDialogUrl(url);
+                          queryClient.invalidateQueries({ queryKey: ['playlists'] });
+                          toast.success('Ссылка обновлена');
+                        } catch {
+                          toast.error('Не удалось обновить ссылку');
+                        }
+                      }}
+                    >
+                      <RefreshCw className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-9 w-9 shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      title="Отменить доступ"
+                      onClick={async () => {
+                        if (!shareDialogPlaylistId) return;
+                        try {
+                          await api.playlists.share(shareDialogPlaylistId, 'disable');
+                          setShareDialogEnabled(false);
+                          setShareDialogUrl(null);
+                          queryClient.invalidateQueries({ queryKey: ['playlists'] });
+                          toast.success('Доступ по ссылке отключен');
+                        } catch {
+                          toast.error('Не удалось отключить доступ');
+                        }
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                    <div className="flex gap-2 shrink-0">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className="h-9"
+                        onClick={async () => {
+                          if (!shareDialogUrl) return;
+                          try {
+                            await navigator.clipboard.writeText(shareDialogUrl);
+                            toast.success('Ссылка скопирована в буфер обмена');
+                          } catch {
+                            toast.error('Не удалось скопировать ссылку');
+                          }
+                        }}
+                      >
+                        Скопировать ссылку
+                      </Button>
+                      <AlertDialogCancel asChild>
+                        <Button variant="outline" size="sm" className="h-9">
+                          Закрыть
+                        </Button>
+                      </AlertDialogCancel>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">Ссылка недоступна.</p>
+              )
+            ) : (
+              <div className="space-y-4">
+                <p className="text-sm text-muted-foreground">
+                  Сейчас доступ по ссылке для этого плейлиста отключён.
+                </p>
+                <div className="flex justify-end gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShareDialogOpen(false)}
+                  >
+                    Закрыть
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={async () => {
+                      if (!shareDialogPlaylistId) return;
+                      try {
+                        const baseUrl =
+                          (stats as StatsType)?.baseUrl ??
+                          (typeof window !== 'undefined' ? window.location.origin : '');
+                        const res = await api.playlists.share(shareDialogPlaylistId, 'enable');
+                        const url =
+                          res.shareToken
+                            ? res.shareUrl ??
+                              `${baseUrl.replace(/\/+$/, '')}/playlist/shared/${res.shareToken}`
+                            : null;
+                        setShareDialogEnabled(!!res.shareEnabled);
+                        setShareDialogUrl(url);
+                        queryClient.invalidateQueries({ queryKey: ['playlists'] });
+                        toast.success('Доступ по ссылке включён');
+                      } catch {
+                        toast.error('Не удалось включить доступ по ссылке');
+                      }
+                    }}
+                  >
+                    Включить доступ по ссылке
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
         </AlertDialogContent>
       </AlertDialog>
 

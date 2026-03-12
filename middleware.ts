@@ -8,6 +8,9 @@ const PUBLIC_PATHS = [
   '/api/auth',
   '/watch',
   '/api/stream',
+  '/api/thumbnail',
+  '/playlist/shared',
+  '/api/playlists/public',
 ];
 
 const PENDING_ALLOWED_PATHS = [

@@ -6,7 +6,7 @@ import { jsonSafe } from '@/lib/json-safe';
 
 export const runtime = 'nodejs';
 
-/** PATCH /api/playlists/[id] — обновить плейлист (название и/или состав) */
+/** PATCH /api/playlists/[id] — обновить плейлист (название и/или состав, для владельца) */
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -72,6 +72,54 @@ export async function PATCH(
     console.error('Error updating playlist:', error);
     return NextResponse.json(
       { error: 'Failed to update playlist' },
+      { status: 500 }
+    );
+  }
+}
+
+/** GET /api/playlists/[id] — получить плейлист текущего пользователя (полное содержимое) */
+export async function GET(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const { id: playlistId } = await params;
+
+    const playlist = await db.playlist.findFirst({
+      where: { id: playlistId, userId: session.user.id },
+      include: {
+        videos: {
+          orderBy: { position: 'asc' },
+          include: {
+            video: true,
+          },
+        },
+      },
+    });
+
+    if (!playlist) {
+      return NextResponse.json({ error: 'Playlist not found' }, { status: 404 });
+    }
+
+    const result = jsonSafe({
+      id: playlist.id,
+      name: playlist.name,
+      createdAt: playlist.createdAt,
+      shareEnabled: playlist.shareEnabled,
+      shareToken: playlist.shareToken,
+      videos: playlist.videos.map((pv) => pv.video),
+    });
+
+    return NextResponse.json(result);
+  } catch (error) {
+    console.error('Error fetching playlist:', error);
+    return NextResponse.json(
+      { error: 'Failed to fetch playlist' },
       { status: 500 }
     );
   }

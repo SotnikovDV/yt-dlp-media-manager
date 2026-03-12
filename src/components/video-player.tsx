@@ -928,9 +928,16 @@ export function VideoPlayer({
               if (document.fullscreenElement) {
                 document.exitFullscreen().catch(() => {});
               }
+              const videoSrc = src;
+              const audioSrc =
+                typeof src === 'string'
+                  ? src.replace(/\.[^./]+$/, '.webp')
+                  : undefined;
               setTrack({
                 id: src,
-                src,
+                src: videoSrc,
+                videoSrc,
+                audioSrc,
                 title,
                 channelName,
                 channelId,
@@ -939,6 +946,7 @@ export function VideoPlayer({
                 chapters,
                 initialTime: currentTime,
                 autoPlay: wasPlaying,
+                playbackKind: 'video',
               });
               setMode('miniplayer');
               if (v) {

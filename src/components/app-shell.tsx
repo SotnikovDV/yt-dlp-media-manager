@@ -17,6 +17,7 @@ import {
   X,
   FolderOpen,
   Tag,
+  Music2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -30,12 +31,13 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import { VideoPlayer } from '@/components/video-player';
+import { MiniAudioPlayer } from '@/components/mini-audio-player';
 import { useGlobalPlayerState, useGlobalPlayerActions } from '@/lib/player-store';
 import { Maximize2 } from 'lucide-react';
 
 function GlobalMiniPlayer() {
   const { mode, currentTrack, wasFullscreenBeforeMiniplayer } = useGlobalPlayerState();
-  const { setMode, clear, updateInitialTime, setAutoPlay } = useGlobalPlayerActions();
+  const { setMode, clear, updateInitialTime, setAutoPlay, setPlaybackKind } = useGlobalPlayerActions();
 
   const isVisible = mode === 'miniplayer' && currentTrack;
   if (!isVisible || !currentTrack) return null;
@@ -63,33 +65,61 @@ function GlobalMiniPlayer() {
             type="button"
             className="flex items-center gap-2 flex-1 min-w-0 px-2 py-1 text-left hover:bg-black/70 transition-colors"
             onClick={() => {
+              if (!currentTrack || currentTrack.playbackKind === 'audio') return;
               if (typeof document === 'undefined') return;
               const el = document.querySelector('[data-player-role=\"mini\"]') as HTMLElement | null;
               el?.click();
             }}
           >
-            <div className="w-32 aspect-video bg-black rounded-md overflow-hidden shrink-0">
-              <VideoPlayer
-                src={currentTrack.src}
-                title={currentTrack.title}
-                channelName={currentTrack.channelName}
-                channelId={currentTrack.channelId}
-                poster={currentTrack.poster}
-                publishedAt={currentTrack.publishedAt}
-                chapters={currentTrack.chapters}
-                initialTime={currentTrack.initialTime}
-                fillContainer
-                mini
-                autoPlay={currentTrack.autoPlay}
-                onPositionSave={(pos) => {
-                  updateInitialTime(pos);
-                  // Сохраняем позицию и на сервере, как в основном плеере
-                  persistPosition(pos);
-                }}
-              />
+            <div className="w-32 aspect-video bg-black rounded-md overflow-hidden shrink-0 flex items-center">
+              {currentTrack.playbackKind === 'audio' && currentTrack.audioSrc ? (
+                <MiniAudioPlayer
+                  src={currentTrack.audioSrc}
+                  title={currentTrack.title}
+                  artist={currentTrack.channelName}
+                  poster={currentTrack.poster}
+                  initialTime={currentTrack.initialTime}
+                  autoPlay={currentTrack.autoPlay}
+                  onPositionSave={(pos, _completed) => {
+                    updateInitialTime(pos);
+                    persistPosition(pos);
+                  }}
+                />
+              ) : (
+                <VideoPlayer
+                  src={currentTrack.videoSrc || currentTrack.src}
+                  title={currentTrack.title}
+                  channelName={currentTrack.channelName}
+                  channelId={currentTrack.channelId}
+                  poster={currentTrack.poster}
+                  publishedAt={currentTrack.publishedAt}
+                  chapters={currentTrack.chapters}
+                  initialTime={currentTrack.initialTime}
+                  fillContainer
+                  mini
+                  autoPlay={currentTrack.autoPlay}
+                  onPositionSave={(pos) => {
+                    updateInitialTime(pos);
+                    // Сохраняем позицию и на сервере, как в основном плеере
+                    persistPosition(pos);
+                  }}
+                />
+              )}
             </div>
             <div className="flex-1 min-w-0 flex flex-col gap-0.5">
-              <div className="text-sm font-medium truncate">{currentTrack.title}</div>
+              <div
+                className="text-sm font-medium truncate"
+                onClick={(e) => {
+                  if (!currentTrack || currentTrack.playbackKind !== 'audio') return;
+                  e.stopPropagation();
+                  const root = document.querySelector(
+                    '[data-role=\"mini-audio-player\"]'
+                  ) as HTMLElement | null;
+                  root?.click();
+                }}
+              >
+                {currentTrack.title}
+              </div>
               {currentTrack.channelName && (
                 <div className="text-xs truncate">
                   {currentTrack.channelName}
@@ -100,6 +130,33 @@ function GlobalMiniPlayer() {
 
           {/* Правая часть: управление режимами */}
           <div className="flex items-center gap-1 pr-2">
+            {currentTrack.audioSrc && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                title="Переключить режим Видео/Аудио"
+                onClick={() => {
+                  const next =
+                    currentTrack.playbackKind === 'audio'
+                      ? 'video'
+                      : 'audio';
+                  setPlaybackKind(next);
+                  setAutoPlay(true);
+                }}
+                aria-label={
+                  currentTrack.playbackKind === 'audio'
+                    ? 'Переключить на видео'
+                    : 'Переключить на аудио'
+                }
+              >
+                {currentTrack.playbackKind === 'audio' ? (
+                  <Video className="h-4 w-4" />
+                ) : (
+                  <Music2 className="h-4 w-4" />
+                )}
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="icon"
