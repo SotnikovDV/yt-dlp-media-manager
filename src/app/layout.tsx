@@ -6,10 +6,13 @@ import { Providers } from "./providers";
 import { DefaultAdminBanner } from "@/components/default-admin-banner";
 
 export const metadata: Metadata = {
-  title: "YT-DLP Media Manager",
-  description: "Personal media center for downloading and watching videos from YouTube and other platforms",
+  title: "DVSt Media Manager",
+  description: "Персональный медиацентр для загрузки и просмотра видео с YouTube",
   keywords: ["yt-dlp", "youtube", "video", "download", "media", "manager"],
-  authors: [{ name: "Media Manager Team" }],
+  authors: [{ name: "2026 © DVSt Home" }],
+  icons: {
+    icon: "/logo.svg",
+  },
 };
 
 export default function RootLayout({

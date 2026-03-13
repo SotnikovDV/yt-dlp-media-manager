@@ -149,7 +149,7 @@ export default function ProfilePage() {
         </Button>
       </div>
 
-      <Card>
+      <Card className="p-2 md:p-4">
         <CardHeader>
           <CardTitle className="text-base">Основные данные</CardTitle>
           <CardDescription>Логин: {profile?.username || '—'} · ID: {userId || '—'}</CardDescription>
@@ -199,7 +199,7 @@ export default function ProfilePage() {
         </CardFooter>
       </Card>
 
-      <Card>
+      <Card className="p-2 md:p-4">
         <CardHeader>
           <CardTitle className="text-base">Смена пароля</CardTitle>
           <CardDescription>Для аккаунтов с логином/паролем</CardDescription>

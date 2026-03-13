@@ -65,7 +65,7 @@ function CardContent({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card-content"
-      className={cn("px-3 py-1", className)}
+      className={cn("px-2 py-1", className)}
       {...props}
     />
   )

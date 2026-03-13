@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { signOut, useSession } from 'next-auth/react';
@@ -55,6 +55,27 @@ function GlobalMiniPlayer() {
       body: JSON.stringify({ position: pos, completed: false }),
     }).catch(() => {});
   };
+
+  // При старте мини‑плеера подтягиваем сохранённую позицию просмотра с сервера
+  useEffect(() => {
+    if (!currentTrack) return;
+    const src = currentTrack.id || currentTrack.src;
+    const videoId = src.split('/').pop();
+    if (!videoId) return;
+    let cancelled = false;
+    fetch(`/api/videos/${videoId}/watch`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { position?: number } | null) => {
+        if (!data || cancelled) return;
+        const pos = typeof data.position === 'number' ? data.position : 0;
+        if (!Number.isFinite(pos) || pos <= 0) return;
+        updateInitialTime(Math.floor(pos));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [currentTrack?.id, currentTrack?.src, updateInitialTime]);
 
   return (
     <div className="fixed bottom-0 left-0 right-0 z-50 pointer-events-none">

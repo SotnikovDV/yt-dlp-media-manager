@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 32">
+  <style>
+    .outline {
+      fill: none;
+      stroke: rgba(255, 0, 0, 0.3);
+      stroke-width: 1;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .fill {
+      fill: rgba(255, 0, 0, 0.15); /* полупрозрачный красный */
+    }
+  </style>
+
+  <!-- Внутренняя заливка -->
+  <path class="fill"
+        d="M6 3
+           H18
+           V26
+           L12 21
+           L6 26
+           Z" />
+
+  <!-- Контур закладки: те же точки, тоже без скруглений -->
+  <path class="outline"
+        d="M6 3
+           H18
+           V26
+           L12 21
+           L6 26
+           Z" />
+</svg>

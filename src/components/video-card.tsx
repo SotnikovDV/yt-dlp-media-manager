@@ -59,6 +59,57 @@ function formatViews(views: number | bigint | string | null | undefined): string
   return `${value.replace('.', ',')} тыс.`;
 }
 
+function hexToRgba(color: string, alpha: number): string {
+  if (!color) return `rgba(0, 0, 0, ${alpha})`;
+  let hex = color.trim();
+  if (hex.startsWith('#')) hex = hex.slice(1);
+  if (hex.length === 3) {
+    hex = hex
+      .split('')
+      .map((ch) => ch + ch)
+      .join('');
+  }
+  if (hex.length !== 6) {
+    return `rgba(0, 0, 0, ${alpha})`;
+  }
+  const r = Number.parseInt(hex.slice(0, 2), 16);
+  const g = Number.parseInt(hex.slice(2, 4), 16);
+  const b = Number.parseInt(hex.slice(4, 6), 16);
+  if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) {
+    return `rgba(0, 0, 0, ${alpha})`;
+  }
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function CategoryBookmarkBadge({ baseColor }: { baseColor: string }) {
+  const fill = hexToRgba(baseColor, 0.9);
+  const stroke = hexToRgba(baseColor, 0.3);
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 32"
+      className="-mt-2 ml-1 w-8 h-[32px]"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        d="M6 3 H18 V26 L12 21 L6 26 Z"
+        style={{ fill, stroke: 'none' }}
+      />
+      <path
+        d="M6 3 H18 V26 L12 21 L6 26 Z"
+        style={{
+          fill: 'none',
+          stroke,
+          strokeWidth: 1,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+        }}
+      />
+    </svg>
+  );
+}
+
 /** Минимальный тип видео для карточки; совместим с VideoType из page */
 export interface VideoCardVideo {
   id: string;
@@ -70,6 +121,8 @@ export interface VideoCardVideo {
   publishedAt: Date | string | null;
    viewCount?: number | bigint | string | null;
   channel: { id: string; name: string; avatarUrl: string | null } | null;
+  /** Категория подписки/канала, из которой пришло видео (для цветной метки). */
+  subscriptionCategory?: { id: string; name: string; backgroundColor: string } | null;
   watchHistory?:
     | { position: number; completed: boolean; watchCount: number }
     | { position: number; completed: boolean; watchCount: number }[]
@@ -86,6 +139,7 @@ export interface VideoCardProps<T extends VideoCardVideo = VideoCardVideo> {
   video: T;
   onPlay: (video: T) => void;
   onFavorite?: (video: T, isFavorite: boolean) => void;
+  onShowDescription?: (video: T) => void;
   /** Базовый URL приложения для меню «Поделиться» (В Telegram / Скопировать ссылку). Если задан, кнопка «Поделиться» открывает выбор варианта. */
   shareBaseUrl?: string;
   /** Плейлисты и колбэки для кнопки «Добавить в плейлист». Если заданы, кнопка показывается вверху карточки справа от «Поделиться». */
@@ -101,6 +155,7 @@ export function VideoCard<T extends VideoCardVideo>({
   video,
   onPlay,
   onFavorite,
+  onShowDescription,
   shareBaseUrl,
   playlists,
   onAddToPlaylist,
@@ -117,9 +172,14 @@ export function VideoCard<T extends VideoCardVideo>({
 
   return (
     <Card
-      className="overflow-hidden cursor-pointer hover:shadow-lg transition-shadow group h-full flex flex-col gap-0 py-0" /** aspect-1/2  **/
+      className="relative overflow-hidden cursor-pointer hover:shadow-lg transition-shadow group h-full flex flex-col gap-0 py-0" /** aspect-1/2  **/
       onClick={() => onPlay(video)}
     >
+      {video.subscriptionCategory?.backgroundColor && (
+        <div className="pointer-events-none absolute top-0 left-0 z-10">
+          <CategoryBookmarkBadge baseColor={video.subscriptionCategory.backgroundColor} />
+        </div>
+      )}
       {/* Блок превью — 50% высоты карточки, картинка по центру по вертикали */}
       <div className="relative flex-[0_0_50%] min-h-0 flex items-center justify-center bg-muted overflow-hidden">
         {/* Кнопки в правом верхнем углу — прозрачный фон, матовое стекло только при наведении */}
@@ -253,18 +313,38 @@ export function VideoCard<T extends VideoCardVideo>({
       </div>
       <CardContent className="p-3 flex flex-col flex-1 min-h-0 overflow-hidden">
         <div className="flex-1 min-h-0">
-          <h3 className="font-medium text-sm line-clamp-2">{video.title}</h3>
+          <div className="flex items-start gap-1">
+            <h3
+              className={cn(
+                'font-medium text-sm line-clamp-2 flex-1',
+                video.description && onShowDescription && 'underline-offset-2 hover:underline cursor-pointer'
+              )}
+              onClick={
+                video.description && onShowDescription
+                  ? (e) => {
+                      e.stopPropagation();
+                      onShowDescription(video);
+                    }
+                  : undefined
+              }
+            >
+              {video.title}
+            </h3>
+          </div>
           <div className="flex items-center justify-between mt-2 text-xs text-muted-foreground">
             {video.channel?.id ? (
               <Link
                 href={`/library?channelId=${encodeURIComponent(video.channel.id)}`}
                 onClick={(e) => e.stopPropagation()}
                 className="hover:underline focus:underline outline-none"
+                title={video.subscriptionCategory?.name || undefined}
               >
                 {video.channel.name}
               </Link>
             ) : (
-              <span>{video.channel?.name || 'Без канала'}</span>
+              <span title={video.subscriptionCategory?.name || undefined}>
+                {video.channel?.name || 'Без канала'}
+              </span>
             )}
             {video.fileSize != null && <span>{formatBytes(video.fileSize)}</span>}
           </div>

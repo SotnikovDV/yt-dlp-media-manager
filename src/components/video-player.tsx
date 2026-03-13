@@ -70,6 +70,9 @@ export interface VideoPlayerProps {
   /** ID канала для перехода на страницу подписки/канала по клику на название */
   channelId?: string;
   publishedAt?: Date | string | null;
+  /** Категория подписки/канала для бейджа в информации о видео. */
+  subscriptionCategoryName?: string | null;
+  subscriptionCategoryColor?: string | null;
   /** Начальная позиция воспроизведения в секундах */
   initialTime?: number;
   /** Вызывается при изменении позиции (троттл) и при паузе/окончании */
@@ -90,6 +93,8 @@ export interface VideoPlayerProps {
   mini?: boolean;
   /** Автоматически запустить воспроизведение при готовности (используется в мини-плеере) */
   autoPlay?: boolean;
+  /** При первом показе попытаться развернуть плеер в fullscreen (используется для режима fullscreen по умолчанию) */
+  initialFullscreen?: boolean;
 }
 
 export function VideoPlayer({
@@ -98,6 +103,8 @@ export function VideoPlayer({
   channelName,
   channelId,
   publishedAt,
+  subscriptionCategoryName,
+  subscriptionCategoryColor,
   initialTime,
   onPositionSave,
   onError,
@@ -109,6 +116,7 @@ export function VideoPlayer({
   chapters,
   mini,
   autoPlay,
+  initialFullscreen,
 }: VideoPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -151,6 +159,7 @@ export function VideoPlayer({
   const isAndroidChromeRef = useRef<boolean | null>(null);
   const { setTrack, setMode, setWasFullscreenBeforeMiniplayer } = useGlobalPlayerActions();
   const autoPlayOnceRef = useRef(false);
+  const initialFullscreenAppliedRef = useRef(false);
 
   // Сообщаем родителю, когда меняется видимость контролов
   useEffect(() => {
@@ -178,6 +187,17 @@ export function VideoPlayer({
       if (hideTimeoutRef.current) clearTimeout(hideTimeoutRef.current);
     };
   }, []);
+
+  // Авто‑fullscreen при первом монтировании, если запрошено
+  useEffect(() => {
+    if (!initialFullscreen || initialFullscreenAppliedRef.current) return;
+    const container = containerRef.current;
+    if (!container) return;
+    if (typeof document === 'undefined') return;
+    if (document.fullscreenElement) return;
+    container.requestFullscreen?.().catch(() => {});
+    initialFullscreenAppliedRef.current = true;
+  }, [initialFullscreen]);
 
   // Ленивая детекция Android Chrome — чтобы при необходимости можно было менять поведение,
   // не трогая основной рендер (например, не вызывать manual pause при смене вкладки).
@@ -1039,21 +1059,36 @@ export function VideoPlayer({
                 {isFullscreen ? title : (title.length > 75 ? `${title.slice(0, 75)}…` : title)}
               </p>
             )}
-            {(channelName || publishedAt) && (
-              <p className="text-white/60 text-xs truncate">
+            {(channelName || publishedAt || subscriptionCategoryName) && (
+              <div className="flex items-center gap-2 text-white/60 text-xs truncate">
                 {channelId && channelName ? (
                   <>
-                    <Link href={`/library?channelId=${encodeURIComponent(channelId)}`} className="channel-link">
+                    <Link
+                      href={`/library?channelId=${encodeURIComponent(channelId)}`}
+                      className="channel-link"
+                    >
                       {channelName}
                     </Link>
-                    {publishedAt && ` · ${formatPublishedDate(publishedAt)}`}
                   </>
                 ) : (
-                  [channelName, publishedAt ? formatPublishedDate(publishedAt) : null]
-                    .filter(Boolean)
-                    .join(' · ')
+                  channelName && <span>{channelName}</span>
                 )}
-              </p>
+                {subscriptionCategoryName && subscriptionCategoryColor && (
+                  <span
+                    className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase text-white/95"
+                    style={{ backgroundColor: subscriptionCategoryColor }}
+                    title={subscriptionCategoryName}
+                  >
+                    {subscriptionCategoryName}
+                  </span>
+                )}
+                {publishedAt && (
+                  <span className="truncate">
+                    {channelName || subscriptionCategoryName ? "· " : ""}
+                    {formatPublishedDate(publishedAt)}
+                  </span>
+                )}
+              </div>
             )}
           </div>
         )}

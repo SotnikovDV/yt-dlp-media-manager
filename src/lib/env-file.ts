@@ -7,6 +7,8 @@ const ENV_KEYS = [
   'DEFAULT_FORMAT',
   'DEFAULT_SUBSCRIPTION_HISTORY_DAYS',
   'DEFAULT_CHECK_INTERVAL',
+  'DEFAULT_PLAYER_MODE',
+  'AUTOPLAY_ON_OPEN',
 ] as const;
 
 function getEnvPath(): string {

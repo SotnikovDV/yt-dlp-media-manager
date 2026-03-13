@@ -26,6 +26,12 @@ export const env = {
   defaultFormat: () => getEnv('DEFAULT_FORMAT', 'mp4'),
   defaultSubscriptionHistoryDays: () => getEnvInt('DEFAULT_SUBSCRIPTION_HISTORY_DAYS', 30),
   defaultCheckInterval: () => getEnvInt('DEFAULT_CHECK_INTERVAL', 360),
+  defaultPlayerMode: (): 'normal' | 'fullscreen' | 'mini' => {
+    const raw = getEnv('DEFAULT_PLAYER_MODE', 'normal').toLowerCase().trim();
+    if (raw === 'fullscreen' || raw === 'mini') return raw;
+    return 'normal';
+  },
+  autoplayOnOpen: () => getEnvInt('AUTOPLAY_ON_OPEN', 1) !== 0,
   mediaLibraryRecentLimit: () =>
     Math.min(MAX_MEDIA_LIBRARY_RECENT, Math.max(1, getEnvInt('MEDIA_LIBRARY_RECENT_LIMIT', 6))),
   subscriptionCheckVideoLimit: () =>

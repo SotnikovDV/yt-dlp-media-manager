@@ -32,11 +32,13 @@ export async function PATCH(
     let videoIds: string[] | undefined;
     if (rawVideoIds !== undefined) {
       const requested = rawVideoIds.filter((id: unknown): id is string => typeof id === 'string').slice(0, 500);
-      const existing = await db.video.findMany({
+      const found = await db.video.findMany({
         where: { id: { in: requested } },
         select: { id: true },
       });
-      videoIds = existing.map((v) => v.id);
+      const foundIds = new Set(found.map((v) => v.id));
+      // Сохраняем порядок из запроса: findMany возвращает строки в произвольном порядке
+      videoIds = requested.filter((id) => foundIds.has(id));
     }
 
     if (videoIds !== undefined) {

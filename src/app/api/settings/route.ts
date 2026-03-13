@@ -33,6 +33,11 @@ export async function GET() {
       defaultCheckInterval: fromFile.DEFAULT_CHECK_INTERVAL
         ? parseInt(fromFile.DEFAULT_CHECK_INTERVAL, 10)
         : env.defaultCheckInterval(),
+      defaultPlayerMode: fromFile.DEFAULT_PLAYER_MODE ?? env.defaultPlayerMode(),
+      autoplayOnOpen:
+        typeof fromFile.AUTOPLAY_ON_OPEN !== 'undefined'
+          ? parseInt(fromFile.AUTOPLAY_ON_OPEN, 10) !== 0
+          : env.autoplayOnOpen(),
     });
   } catch (error) {
     console.error('Error fetching settings:', error);
@@ -58,6 +63,19 @@ export async function PUT(request: NextRequest) {
     }
     if (typeof body.defaultCheckInterval !== 'undefined') {
       updates.DEFAULT_CHECK_INTERVAL = String(body.defaultCheckInterval);
+    }
+    if (typeof body.defaultPlayerMode === 'string') {
+      const v = String(body.defaultPlayerMode).toLowerCase().trim();
+      if (v === 'normal' || v === 'fullscreen' || v === 'mini') {
+        updates.DEFAULT_PLAYER_MODE = v;
+      }
+    }
+    if (typeof body.autoplayOnOpen !== 'undefined') {
+      const b =
+        body.autoplayOnOpen === true ||
+        body.autoplayOnOpen === 1 ||
+        body.autoplayOnOpen === '1';
+      updates.AUTOPLAY_ON_OPEN = b ? '1' : '0';
     }
 
     if (Object.keys(updates).length === 0) {

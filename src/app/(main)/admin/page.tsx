@@ -340,7 +340,7 @@ export default function AdminPage() {
         </p>
       </div>
 
-        <Card>
+        <Card className="p-2 md:p-4">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Users className="h-5 w-5" />
@@ -438,7 +438,7 @@ export default function AdminPage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="p-2 md:p-4">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Tag className="h-5 w-5" />
@@ -516,7 +516,7 @@ export default function AdminPage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="p-2 md:p-4">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <FolderSync className="h-5 w-5" />
@@ -542,7 +542,7 @@ export default function AdminPage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="p-2 md:p-4">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <ImageIcon className="h-5 w-5" />
@@ -568,7 +568,7 @@ export default function AdminPage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="p-2 md:p-4">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Tag className="h-5 w-5" />
