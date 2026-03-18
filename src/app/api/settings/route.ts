@@ -30,6 +30,9 @@ export async function GET() {
       defaultSubscriptionHistoryDays: fromFile.DEFAULT_SUBSCRIPTION_HISTORY_DAYS
         ? parseInt(fromFile.DEFAULT_SUBSCRIPTION_HISTORY_DAYS, 10)
         : env.defaultSubscriptionHistoryDays(),
+      defaultSubscriptionAutoDeleteDays: fromFile.DEFAULT_SUBSCRIPTION_AUTO_DELETE_DAYS
+        ? parseInt(fromFile.DEFAULT_SUBSCRIPTION_AUTO_DELETE_DAYS, 10)
+        : env.defaultSubscriptionAutoDeleteDays(),
       defaultCheckInterval: fromFile.DEFAULT_CHECK_INTERVAL
         ? parseInt(fromFile.DEFAULT_CHECK_INTERVAL, 10)
         : env.defaultCheckInterval(),
@@ -38,6 +41,8 @@ export async function GET() {
         typeof fromFile.AUTOPLAY_ON_OPEN !== 'undefined'
           ? parseInt(fromFile.AUTOPLAY_ON_OPEN, 10) !== 0
           : env.autoplayOnOpen(),
+      telegramBotToken: fromFile.TELEGRAM_BOT_TOKEN ?? env.telegramBotToken(),
+      telegramAdminChatId: fromFile.TELEGRAM_ADMIN_CHAT_ID ?? env.telegramAdminChatId(),
     });
   } catch (error) {
     console.error('Error fetching settings:', error);
@@ -61,6 +66,9 @@ export async function PUT(request: NextRequest) {
     if (typeof body.defaultSubscriptionHistoryDays !== 'undefined') {
       updates.DEFAULT_SUBSCRIPTION_HISTORY_DAYS = String(body.defaultSubscriptionHistoryDays);
     }
+    if (typeof body.defaultSubscriptionAutoDeleteDays !== 'undefined') {
+      updates.DEFAULT_SUBSCRIPTION_AUTO_DELETE_DAYS = String(body.defaultSubscriptionAutoDeleteDays);
+    }
     if (typeof body.defaultCheckInterval !== 'undefined') {
       updates.DEFAULT_CHECK_INTERVAL = String(body.defaultCheckInterval);
     }
@@ -76,6 +84,12 @@ export async function PUT(request: NextRequest) {
         body.autoplayOnOpen === 1 ||
         body.autoplayOnOpen === '1';
       updates.AUTOPLAY_ON_OPEN = b ? '1' : '0';
+    }
+    if (typeof body.telegramBotToken === 'string') {
+      updates.TELEGRAM_BOT_TOKEN = body.telegramBotToken;
+    }
+    if (typeof body.telegramAdminChatId === 'string') {
+      updates.TELEGRAM_ADMIN_CHAT_ID = body.telegramAdminChatId;
     }
 
     if (Object.keys(updates).length === 0) {

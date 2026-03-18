@@ -79,6 +79,10 @@ export async function PUT(
       include: { channel: true, category: true }
     });
 
+    await db.rejectedSubscriptionVideo.deleteMany({
+      where: { subscriptionId: id },
+    });
+
     return NextResponse.json(subscription);
   } catch (error) {
     console.error('Error updating subscription:', error);

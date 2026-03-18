@@ -62,6 +62,7 @@ export async function GET(request: NextRequest) {
       channel: true,
       watchHistory: true,
       favorites: { where: { userId: session.user.id }, take: 1 } as const,
+      pins: { where: { userId: session.user.id }, take: 1 } as const,
     };
 
     const [recentPublished, recentDownloaded, watchedRecords, favoriteRecords, individualRecords] = await Promise.all([

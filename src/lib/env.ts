@@ -25,6 +25,7 @@ export const env = {
   defaultQuality: () => getEnv('DEFAULT_QUALITY', 'best'),
   defaultFormat: () => getEnv('DEFAULT_FORMAT', 'mp4'),
   defaultSubscriptionHistoryDays: () => getEnvInt('DEFAULT_SUBSCRIPTION_HISTORY_DAYS', 30),
+  defaultSubscriptionAutoDeleteDays: () => getEnvInt('DEFAULT_SUBSCRIPTION_AUTO_DELETE_DAYS', 30),
   defaultCheckInterval: () => getEnvInt('DEFAULT_CHECK_INTERVAL', 360),
   defaultPlayerMode: (): 'normal' | 'fullscreen' | 'mini' => {
     const raw = getEnv('DEFAULT_PLAYER_MODE', 'normal').toLowerCase().trim();
@@ -53,4 +54,6 @@ export const env = {
     if (v === 'none' || v === 'error' || v === 'warn' || v === 'info' || v === 'debug') return v;
     return 'info';
   },
+  telegramBotToken: () => getEnv('TELEGRAM_BOT_TOKEN', ''),
+  telegramAdminChatId: () => getEnv('TELEGRAM_ADMIN_CHAT_ID', ''),
 };

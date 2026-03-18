@@ -10,6 +10,8 @@ export interface MiniAudioPlayerProps {
   initialTime?: number;
   autoPlay?: boolean;
   onPositionSave?: (position: number, completed: boolean) => void;
+  /** Колбэк для синхронизации текущей позиции и длительности с внешним компонентом (например, мини-плеером) */
+  onTimeUpdate?: (currentTime: number, duration: number) => void;
 }
 
 export function MiniAudioPlayer({
@@ -20,6 +22,7 @@ export function MiniAudioPlayer({
   initialTime,
   autoPlay,
   onPositionSave,
+  onTimeUpdate,
 }: MiniAudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -48,17 +51,20 @@ export function MiniAudioPlayer({
     if (!a) return;
     const t = a.currentTime;
     setCurrentTime(t);
+    onTimeUpdate?.(t, a.duration || 0);
     if (onPositionSave && Date.now() - lastPositionSaveRef.current >= POSITION_SAVE_THROTTLE_MS) {
       lastPositionSaveRef.current = Date.now();
       onPositionSave(Math.floor(t), false);
     }
-  }, [onPositionSave]);
+  }, [onPositionSave, onTimeUpdate]);
 
   const handleLoadedMetadata = useCallback(() => {
     const a = audioRef.current;
     if (!a) return;
-    setDuration(a.duration || 0);
-  }, []);
+    const d = a.duration || 0;
+    setDuration(d);
+    onTimeUpdate?.(a.currentTime, d);
+  }, [onTimeUpdate]);
 
   const handleEnded = useCallback(() => {
     const a = audioRef.current;

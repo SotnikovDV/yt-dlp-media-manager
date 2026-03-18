@@ -14,6 +14,8 @@ import {
   SkipBack,
   SkipForward,
   PictureInPicture2,
+  Info,
+  X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
@@ -41,6 +43,136 @@ const EDGE_ZONE_FRACTION = 0.15;
 const HOLD_DELAY_MS = 400;
 const HOLD_SEEK_INTERVAL_MS = 100;
 const HOLD_SEEK_STEP = 3;
+
+// ——— Рендеринг описания видео в панели плеера ———
+
+const urlRegex = /(https?:\/\/[^\s]+)/g;
+
+function renderTextWithLinksInPlayer(text: string, keyPrefix: string) {
+  if (!text) return null;
+  const parts = text.split(urlRegex);
+  return parts.map((part, index) => {
+    if (part.match(urlRegex)) {
+      return (
+        <a
+          key={`${keyPrefix}-url-${index}`}
+          href={part}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-blue-400 underline underline-offset-2 break-all"
+        >
+          {part}
+        </a>
+      );
+    }
+    return <React.Fragment key={`${keyPrefix}-text-${index}`}>{part}</React.Fragment>;
+  });
+}
+
+function parseLeadingTimestampInPlayer(line: string): { seconds: number; rest: string } | null {
+  const match = line.match(/^\s*(\d{1,2}):(\d{2})(?::(\d{2}))?(.*)$/);
+  if (!match) return null;
+  const [, hStr, mStr, sStr, tail] = match;
+  const hours = sStr != null ? Number(hStr) || 0 : 0;
+  const minutes = sStr != null ? Number(mStr) || 0 : Number(hStr) || 0;
+  const seconds = sStr != null ? Number(sStr) || 0 : Number(mStr) || 0;
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes) || !Number.isFinite(seconds)) return null;
+  const totalSeconds = hours * 3600 + minutes * 60 + seconds;
+  if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return null;
+  let rest = tail ?? '';
+  rest = rest.replace(/^[\s\-–—]+/, ' ').trimStart();
+  return { seconds: totalSeconds, rest };
+}
+
+function renderDescriptionInPlayer(
+  description: string,
+  onSeekToTime?: (seconds: number) => void
+) {
+  if (!description) return null;
+  const lines = description.split(/\r?\n/);
+  return lines.map((rawLine, lineIndex) => {
+    const keyPrefix = `pl-line-${lineIndex}`;
+    const parsed = onSeekToTime != null ? parseLeadingTimestampInPlayer(rawLine) : null;
+    if (!parsed) {
+      return (
+        <div key={keyPrefix} className="mb-1 last:mb-0">
+          {renderTextWithLinksInPlayer(rawLine, keyPrefix)}
+        </div>
+      );
+    }
+    const { seconds, rest } = parsed;
+    const timestampText = rawLine.match(/^\s*(\d{1,2}:\d{2}(?::\d{2})?)/)?.[1] ?? '';
+    return (
+      <div key={keyPrefix} className="mb-1 last:mb-0">
+        <button
+          type="button"
+          className="mr-2 text-blue-400 font-mono cursor-pointer hover:underline focus:outline-none focus:ring-1 focus:ring-blue-400/70 rounded-sm"
+          onClick={() => onSeekToTime?.(seconds)}
+          title="Перейти к этому моменту"
+          aria-label={`Перейти к моменту ${timestampText || seconds + ' секунд'}`}
+        >
+          {timestampText}
+        </button>
+        {rest && renderTextWithLinksInPlayer(rest, `${keyPrefix}-rest`)}
+      </div>
+    );
+  });
+}
+
+// ——— Боковая панель описания видео (fullscreen) ———
+
+interface VideoInfoPanelProps {
+  open: boolean;
+  title: string;
+  description: string;
+  youtubeUrl?: string | null;
+  onClose: () => void;
+  onSeekToTime: (seconds: number) => void;
+}
+
+function VideoInfoPanel({ open, title, description, youtubeUrl, onClose, onSeekToTime }: VideoInfoPanelProps) {
+  return (
+    <div
+      data-role="video-controls"
+      className={cn(
+        'absolute right-0 top-0 bottom-0 z-40 w-80 bg-black/88 backdrop-blur-sm flex flex-col transition-transform duration-300 ease-in-out',
+        open ? 'translate-x-0' : 'translate-x-full'
+      )}
+      onClick={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onMouseMove={(e) => e.stopPropagation()}
+    >
+      <div className="flex items-start justify-between gap-2 px-4 pt-4 pb-3 border-b border-white/10 shrink-0">
+        <h3 className="text-white font-semibold text-sm leading-snug">{title}</h3>
+        <button
+          type="button"
+          onClick={onClose}
+          className="shrink-0 text-white/60 hover:text-white p-0.5 rounded transition-colors"
+          aria-label="Закрыть описание"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+      {youtubeUrl && (
+        <div className="px-4 py-2 border-b border-white/10 shrink-0">
+          <a
+            href={youtubeUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-blue-400 hover:underline"
+          >
+            Открыть на YouTube
+          </a>
+        </div>
+      )}
+      <div className="flex-1 overflow-y-auto px-4 py-3 text-sm text-white/80 whitespace-pre-wrap min-h-0">
+        {renderDescriptionInPlayer(description, onSeekToTime)}
+      </div>
+    </div>
+  );
+}
+
+// ——————————————————————————————————————————
 
 function getEdgeZone(rect: DOMRect, clientX: number): 'left' | 'right' | null {
   const w = rect.width * EDGE_ZONE_FRACTION;
@@ -95,6 +227,12 @@ export interface VideoPlayerProps {
   autoPlay?: boolean;
   /** При первом показе попытаться развернуть плеер в fullscreen (используется для режима fullscreen по умолчанию) */
   initialFullscreen?: boolean;
+  /** Колбэк для синхронизации текущей позиции и длительности с внешним компонентом (например, мини-плеером) */
+  onTimeUpdate?: (currentTime: number, duration: number) => void;
+  /** Текст описания видео — показывается в боковой панели при нажатии кнопки (i) в fullscreen */
+  description?: string;
+  /** Ссылка на YouTube для отображения в панели описания */
+  youtubeUrl?: string | null;
 }
 
 export function VideoPlayer({
@@ -117,6 +255,9 @@ export function VideoPlayer({
   mini,
   autoPlay,
   initialFullscreen,
+  onTimeUpdate,
+  description,
+  youtubeUrl,
 }: VideoPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -138,6 +279,7 @@ export function VideoPlayer({
   const [controlsVisible, setControlsVisible] = useState(true);
   const [isBuffering, setIsBuffering] = useState(false);
   const [volumeOpen, setVolumeOpen] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
   const [autoAdvance, setAutoAdvance] = useState(() => {
     if (typeof window === 'undefined') return true;
     const v = localStorage.getItem(AUTO_NEXT_STORAGE_KEY);
@@ -248,17 +390,19 @@ export function VideoPlayer({
     if (!v) return;
     const t = v.currentTime;
     setCurrentTime(t);
+    onTimeUpdate?.(t, v.duration || 0);
     if (onPositionSave && Date.now() - lastPositionSaveRef.current >= POSITION_SAVE_THROTTLE_MS) {
       lastPositionSaveRef.current = Date.now();
       onPositionSave(Math.floor(t), false);
     }
-  }, [onPositionSave]);
+  }, [onPositionSave, onTimeUpdate]);
 
   const handleLoadedMetadata = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
     const d = v.duration;
     setDuration(d);
+    onTimeUpdate?.(v.currentTime, d);
     if (
       !initialTimeSetRef.current &&
       typeof initialTime === 'number' &&
@@ -270,10 +414,11 @@ export function VideoPlayer({
       if (t > 0) {
         v.currentTime = t;
         setCurrentTime(t);
+        onTimeUpdate?.(t, d);
       }
       initialTimeSetRef.current = true;
     }
-  }, [initialTime]);
+  }, [initialTime, onTimeUpdate]);
 
   const handlePause = useCallback(() => {
     const v = videoRef.current;
@@ -345,6 +490,14 @@ export function VideoPlayer({
     const v = videoRef.current;
     if (!v) return;
     const t = Math.max(0, Math.min(v.duration, v.currentTime + delta));
+    v.currentTime = t;
+    setCurrentTime(t);
+  }, []);
+
+  const seekToAbsolute = useCallback((seconds: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+    const t = Math.max(0, Math.min(v.duration || 0, seconds));
     v.currentTime = t;
     setCurrentTime(t);
   }, []);
@@ -454,7 +607,11 @@ export function VideoPlayer({
   }, [togglePlay, seekBy, volumeBy, toggleFullscreen, toggleMute, resetHideTimer]);
 
   useEffect(() => {
-    const onFsChange = () => setIsFullscreen(!!document.fullscreenElement);
+    const onFsChange = () => {
+      const fs = !!document.fullscreenElement;
+      setIsFullscreen(fs);
+      if (!fs) setInfoOpen(false);
+    };
     document.addEventListener('fullscreenchange', onFsChange);
     return () => document.removeEventListener('fullscreenchange', onFsChange);
   }, []);
@@ -795,6 +952,46 @@ export function VideoPlayer({
         </div>
       )}
 
+      {/* Кнопка (i) — только в fullscreen, только если есть описание */}
+      {!mini && isFullscreen && !!description && (
+        <div
+          className={cn(
+            'absolute top-3 right-3 z-30 transition-opacity duration-200',
+            controlsVisible || infoOpen ? 'opacity-100' : 'opacity-0'
+          )}
+        >
+          <button
+            type="button"
+            data-role="video-controls"
+            onClick={(e) => {
+              e.stopPropagation();
+              setInfoOpen((o) => !o);
+              resetHideTimer();
+            }}
+            onDoubleClick={(e) => e.stopPropagation()}
+            className={cn(
+              'w-9 h-9 rounded-full flex items-center justify-center transition-all focus:outline-none focus:ring-2 focus:ring-white/50',
+              infoOpen ? 'bg-white/20 hover:bg-white/30' : 'bg-black/50 hover:bg-black/80'
+            )}
+            aria-label="Описание видео"
+          >
+            <Info className="w-5 h-5 text-white" />
+          </button>
+        </div>
+      )}
+
+      {/* Панель описания — прижата к правому краю, только в fullscreen */}
+      {!mini && isFullscreen && !!description && (
+        <VideoInfoPanel
+          open={infoOpen}
+          title={title}
+          description={description}
+          youtubeUrl={youtubeUrl}
+          onClose={() => setInfoOpen(false)}
+          onSeekToTime={seekToAbsolute}
+        />
+      )}
+
       {/* Индикатор буферизации: z-30, pointer-events-none */}
       {isBuffering && (
         <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/30 pointer-events-none">
@@ -867,9 +1064,66 @@ export function VideoPlayer({
             </div>
           </div>
 
-          <span className="text-xs tabular-nums min-w-8 text-right">{formatTime(currentTime)}</span>
-          <span className="text-white/70">/</span>
-          <span className="text-xs text-white/80 tabular-nums">{formatTime(duration)}</span>
+          {/* Текущая позиция / общая длительность.
+              При наличии глав кликом открывается список эпизодов. */}
+          {chapters && chapters.length > 0 ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="flex items-center gap-1 text-xs tabular-nums min-w-0 px-1 rounded hover:bg-white/10 focus:outline-none focus:ring-1 focus:ring-white/60"
+                  onClick={(e) => e.stopPropagation()}
+                  aria-label="Эпизоды по тайм-кодам"
+                >
+                  <span className="min-w-8 text-right">{formatTime(currentTime)}</span>
+                  <span className="text-white/70">/</span>
+                  <span className="text-white/80">{formatTime(duration)}</span>
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="start"
+                side={isFullscreen ? 'top' : 'bottom'}
+                avoidCollisions={!isFullscreen}
+                container={
+                  isFullscreen && typeof document !== 'undefined'
+                    ? (document.fullscreenElement as HTMLElement | null) ?? undefined
+                    : undefined
+                }
+                className="max-h-[280px] w-[280px] overflow-y-auto text-xs bg-black/70 text-white border border-white/20 shadow-lg rounded-md backdrop-blur-sm"
+              >
+                {chapters.map((ch, idx) => (
+                  <DropdownMenuItem
+                    key={`${ch.startTime}-${idx}`}
+                    className="flex items-start gap-2 py-1.5 px-2 rounded-sm focus:bg-white/15 focus:text-white data-[highlighted]:bg-white/15 data-[highlighted]:text-white"
+                    onClick={() => {
+                      const v = videoRef.current;
+                      if (!v) return;
+                      const t = Math.max(0, Math.min(ch.startTime ?? 0, duration || v.duration || 0));
+                      v.currentTime = t;
+                      setCurrentTime(t);
+                    }}
+                  >
+                    <span className="font-mono text-white/90 shrink-0">
+                      {formatTime(ch.startTime ?? 0)}
+                    </span>
+                    <span className="text-white/90 line-clamp-2 wrap-break-word">
+                      {ch.title || '\u00A0'}
+                    </span>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <>
+              <span className="text-xs tabular-nums min-w-8 text-right">
+                {formatTime(currentTime)}
+              </span>
+              <span className="text-white/70">/</span>
+              <span className="text-xs text-white/80 tabular-nums">
+                {formatTime(duration)}
+              </span>
+            </>
+          )}
 
           <div className="flex-1 min-w-0" />
 
@@ -1073,7 +1327,7 @@ export function VideoPlayer({
                 ) : (
                   channelName && <span>{channelName}</span>
                 )}
-                {subscriptionCategoryName && subscriptionCategoryColor && (
+                {/* {subscriptionCategoryName && subscriptionCategoryColor && (
                   <span
                     className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase text-white/95"
                     style={{ backgroundColor: subscriptionCategoryColor }}
@@ -1081,7 +1335,7 @@ export function VideoPlayer({
                   >
                     {subscriptionCategoryName}
                   </span>
-                )}
+                )} */}
                 {publishedAt && (
                   <span className="truncate">
                     {channelName || subscriptionCategoryName ? "· " : ""}

@@ -10,6 +10,8 @@ const THUMB_EXT = ['.jpg', '.webp', '.png', '.jpeg'];
 
 export type CleanOldOptions = {
   skipFavoritesForUserId?: string | null;
+  /** Если true — не удалять видео, у которых есть хотя бы один пин от любого пользователя */
+  skipPinned?: boolean;
 };
 
 export async function cleanOldVideosForSubscription(
@@ -43,11 +45,17 @@ export async function cleanOldVideosForSubscription(
         }
       : {};
 
+  // Если видео пометил "Не очищать" хотя бы один пользователь — не удалять
+  const pinFilter = options.skipPinned !== false
+    ? { pins: { none: {} } }
+    : {};
+
   const videos = await db.video.findMany({
     where: {
       channelId: sub.channelId,
       publishedAt: { not: null, lt: cutoffDate },
       ...favoriteFilter,
+      ...pinFilter,
     },
     select: { id: true, filePath: true, platformId: true },
   });

@@ -23,6 +23,8 @@ export interface GlobalPlayerTrack {
   autoPlay?: boolean;
   /** Текущий режим воспроизведения в глобальном плеере */
   playbackKind?: 'video' | 'audio';
+  /** Если true, не загружать сохранённую позицию с сервера при открытии мини-плеера (например, при seek из описания) */
+  skipServerPosition?: boolean;
 }
 
 export interface GlobalPlayerState {
@@ -38,6 +40,7 @@ export type GlobalPlayerActions = {
   setMode: (mode: PlayerMode) => void;
   setWasFullscreenBeforeMiniplayer: (value: boolean) => void;
   updateInitialTime: (time: number) => void;
+  updateChapters: (chapters: GlobalPlayerTrack['chapters']) => void;
   setAutoPlay: (value: boolean) => void;
   setPlaybackKind: (value: 'video' | 'audio') => void;
 };
@@ -108,6 +111,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const updateChapters = useCallback((chapters: GlobalPlayerTrack['chapters']) => {
+    setState((prev) => {
+      if (!prev.currentTrack) return prev;
+      return { ...prev, currentTrack: { ...prev.currentTrack, chapters } };
+    });
+  }, []);
+
   const setPlaybackKind = useCallback((value: 'video' | 'audio') => {
     setState((prev) => {
       if (!prev.currentTrack) return prev;
@@ -128,10 +138,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       setMode,
       setWasFullscreenBeforeMiniplayer,
       updateInitialTime,
+      updateChapters,
       setAutoPlay,
       setPlaybackKind,
     }),
-    [setTrack, clear, setMode, setWasFullscreenBeforeMiniplayer, updateInitialTime, setAutoPlay, setPlaybackKind]
+    [setTrack, clear, setMode, setWasFullscreenBeforeMiniplayer, updateInitialTime, updateChapters, setAutoPlay, setPlaybackKind]
   );
 
   return (

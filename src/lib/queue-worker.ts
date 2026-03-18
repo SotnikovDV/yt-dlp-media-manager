@@ -10,6 +10,7 @@ import { downloadAndSaveChannelAvatar } from '@/lib/avatars';
 import { downloadAndSaveVideoThumbnail } from '@/lib/thumbnails';
 import { checkSubscription } from '@/lib/subscription-checker';
 import { writeQueueLog } from '@/lib/queue-logger';
+import { sendTelegramAdminNotification } from '@/lib/telegram';
 import { cleanOldVideosForSubscription } from '@/lib/subscription-clean-old';
 import { getTagsForVideo } from '@/lib/read-info-chapters';
 import { syncVideoTagsFromNames } from '@/lib/sync-video-tags';
@@ -185,6 +186,7 @@ async function runAutoDeleteSubscriptions() {
       chunk.map((sub) =>
         cleanOldVideosForSubscription(sub.id, sub.autoDeleteDays, {
           skipFavoritesForUserId: sub.userId,
+          skipPinned: true,
         }),
       ),
     );
@@ -363,6 +365,10 @@ async function tick() {
               completedAt: new Date(),
             },
           });
+          void sendTelegramAdminNotification(
+            `⚠️ <b>Ошибка загрузки</b>\nЗадача: ${task.title || task.url}\nОшибка: ${errorMsg}`,
+            errorMsg
+          );
           activeCount--;
           continue;
         }
@@ -372,7 +378,7 @@ async function tick() {
       if (task.subscriptionId && task.subscription) {
         const video = await db.video.findUnique({
           where: { id: videoId! },
-          select: { publishedAt: true, title: true },
+          select: { publishedAt: true, title: true, platformId: true },
         });
         if (video?.publishedAt) {
           const cutoff = new Date();
@@ -387,6 +393,19 @@ async function tick() {
                 errorMsg: null,
               },
             });
+            if (video.platformId) {
+              try {
+                await db.rejectedSubscriptionVideo.create({
+                  data: {
+                    subscriptionId: task.subscriptionId,
+                    platformId: video.platformId,
+                  },
+                });
+              } catch (e: unknown) {
+                const err = e as { code?: string };
+                if (err?.code !== 'P2002') throw e;
+              }
+            }
             activeCount--;
             continue;
           }
@@ -492,6 +511,10 @@ async function tick() {
             where: { id: task.id },
             data: { status: 'failed', errorMsg: result.error || 'Unknown error', completedAt },
           });
+          void sendTelegramAdminNotification(
+            `⚠️ <b>Ошибка загрузки</b>\nЗадача: ${task.title || task.url}\nОшибка: ${result.error || 'Unknown error'}`,
+            result.error || 'Unknown error'
+          );
         })
         .catch(async (err) => {
           const errorMsg = err?.message || 'Unknown error';
@@ -500,6 +523,10 @@ async function tick() {
             where: { id: task.id },
             data: { status: 'failed', errorMsg, completedAt: new Date() },
           });
+          void sendTelegramAdminNotification(
+            `⚠️ <b>Ошибка загрузки</b>\nЗадача: ${task.title || task.url}\nОшибка: ${errorMsg}`,
+            errorMsg
+          );
         });
     }
   } finally {

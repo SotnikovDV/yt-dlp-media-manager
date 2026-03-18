@@ -72,7 +72,7 @@ export async function PATCH(
     }
 
     const body = await request.json().catch(() => ({}));
-    const position = typeof body.position === 'number' ? Math.max(0, Math.floor(body.position)) : 0;
+    const positionRaw = typeof body.position === 'number' ? Math.max(0, Math.floor(body.position)) : null;
     const completed = typeof body.completed === 'boolean' ? body.completed : undefined;
 
     await db.watchHistory.upsert({
@@ -82,13 +82,13 @@ export async function PATCH(
       create: {
         userId: session.user.id,
         videoId,
-        position,
+        position: positionRaw ?? 0,
         completed: completed ?? false,
         watchCount: 1,
         lastWatchedAt: new Date(),
       },
       update: {
-        position,
+        ...(positionRaw !== null && { position: positionRaw }),
         lastWatchedAt: new Date(),
         ...(completed !== undefined && { completed }),
       },

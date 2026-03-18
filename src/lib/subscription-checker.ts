@@ -48,7 +48,7 @@ export async function checkSubscription(sub: SubscriptionWithChannel): Promise<C
     );
     const urls = videoIds.map((videoId) => `https://www.youtube.com/watch?v=${videoId}`);
 
-    const [downloadedVideos, existingTasks] = await Promise.all([
+    const [downloadedVideos, existingTasks, rejectedRows] = await Promise.all([
       db.video.findMany({
         where: { platformId: { in: videoIds }, filePath: { not: null } },
         select: { platformId: true },
@@ -58,9 +58,16 @@ export async function checkSubscription(sub: SubscriptionWithChannel): Promise<C
         select: { id: true, url: true, status: true, createdAt: true, errorMsg: true },
         orderBy: { createdAt: 'desc' },
       }),
+      videoIds.length > 0
+        ? db.rejectedSubscriptionVideo.findMany({
+            where: { subscriptionId: sub.id, platformId: { in: videoIds } },
+            select: { platformId: true },
+          })
+        : Promise.resolve([]),
     ]);
 
     const downloadedSet = new Set(downloadedVideos.map((v) => v.platformId));
+    const rejectedSet = new Set(rejectedRows.map((r) => r.platformId));
     const activeStatuses = new Set(['pending', 'downloading', 'processing', 'paused']);
     const score = (status: string) => (activeStatuses.has(status) ? 3 : status === 'failed' ? 2 : 1);
 
@@ -86,6 +93,7 @@ export async function checkSubscription(sub: SubscriptionWithChannel): Promise<C
       const videoId = v.id;
       if (!videoId) continue;
       if (downloadedSet.has(videoId)) continue;
+      if (rejectedSet.has(videoId)) continue;
 
       const url = `https://www.youtube.com/watch?v=${videoId}`;
       const existingTask = taskByUrl.get(url);

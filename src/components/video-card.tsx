@@ -2,18 +2,41 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
-import { Play, Video, CheckCircle, Star, Trash2, Download, ExternalLink, Share2, Eye, ListPlus, Plus, X } from 'lucide-react';
+import { Play, Video, CheckCircle, Star, Trash2, Download, ExternalLink, Share2, Eye, ListPlus, Plus, X, MoreVertical, Tag, MessageCircle, Link2 } from 'lucide-react';
+import { toast } from 'sonner';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { ShareVideoMenu } from '@/components/share-video-menu';
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuCheckboxItem,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
+
+function buildWatchUrl(baseUrl: string, videoId: string): string {
+  return `${baseUrl.replace(/\/$/, '')}/watch/${videoId}`;
+}
+
+function openTelegramShare(url: string, text: string): void {
+  const u = new URL('https://t.me/share/url');
+  u.searchParams.set('url', url);
+  u.searchParams.set('text', text);
+  window.open(u.toString(), '_blank', 'noopener,noreferrer');
+}
+
+function copyToClipboard(url: string): void {
+  navigator.clipboard.writeText(url).then(
+    () => toast.success('Ссылка скопирована'),
+    () => toast.error('Не удалось скопировать')
+  );
+}
 
 /** Плейлист для кнопки «Добавить в плейлист» (из API). */
 export interface PlaylistForCard {
@@ -128,6 +151,7 @@ export interface VideoCardVideo {
     | { position: number; completed: boolean; watchCount: number }[]
     | null;
   favorites?: { id: string }[];
+  pins?: { id: string }[];
   platformId?: string;
   description?: string | null;
   quality?: string | null;
@@ -148,6 +172,8 @@ export interface VideoCardProps<T extends VideoCardVideo = VideoCardVideo> {
   onRemoveFromPlaylist?: (playlistId: string, videoId: string) => void;
   onCreatePlaylistAndAdd?: (videoId: string, suggestedName?: string) => void;
   onDelete?: (videoId: string) => void;
+  onToggleWatched?: (videoId: string, completed: boolean) => void;
+  onToggleKeep?: (videoId: string, pinned: boolean) => void;
   showFavoriteButton?: boolean;
 }
 
@@ -162,22 +188,38 @@ export function VideoCard<T extends VideoCardVideo>({
   onRemoveFromPlaylist,
   onCreatePlaylistAndAdd,
   onDelete,
+  onToggleWatched,
+  onToggleKeep,
   showFavoriteButton = false,
 }: VideoCardProps<T>) {
   const watchRecord = Array.isArray(video.watchHistory) ? video.watchHistory[0] : video.watchHistory;
   const isFavorite = Array.isArray(video.favorites) && video.favorites.length > 0;
+  const isPinned = Array.isArray(video.pins) && video.pins.length > 0;
   const [playlistMenuOpen, setPlaylistMenuOpen] = useState(false);
+  const [contextMenuOpen, setContextMenuOpen] = useState(false);
+  const [watchedOverride, setWatchedOverride] = useState<boolean | null>(null);
+  const [pinnedOverride, setPinnedOverride] = useState<boolean | null>(null);
+  const [favoriteOverride, setFavoriteOverride] = useState<boolean | null>(null);
   const thumbnailSrc =
     (video.filePath || video.thumbnailUrl) ? `/api/thumbnail/${video.id}` : null;
 
+  const isFavoriteEffective = favoriteOverride ?? isFavorite;
+  const isViewed = watchedOverride ?? (watchRecord?.completed === true);
+  const isKept = pinnedOverride ?? isPinned;
+  const isNew =
+    !isViewed &&
+    video.downloadedAt != null &&
+    Date.now() - new Date(video.downloadedAt).getTime() < 24 * 60 * 60 * 1000;
+  const badgeColor = isViewed ? '#6B7280' : isNew ? '#EAB308' : null;
+
   return (
     <Card
-      className="relative overflow-hidden cursor-pointer hover:shadow-lg transition-shadow group h-full flex flex-col gap-0 py-0" /** aspect-1/2  **/
+      className="relative isolate overflow-hidden cursor-pointer hover:shadow-lg transition-shadow group h-full flex flex-col gap-0 py-0" /** aspect-1/2  **/
       onClick={() => onPlay(video)}
     >
-      {video.subscriptionCategory?.backgroundColor && (
+      {badgeColor && (
         <div className="pointer-events-none absolute top-0 left-0 z-10">
-          <CategoryBookmarkBadge baseColor={video.subscriptionCategory.backgroundColor} />
+          <CategoryBookmarkBadge baseColor={badgeColor} />
         </div>
       )}
       {/* Блок превью — 50% высоты карточки, картинка по центру по вертикали */}
@@ -311,8 +353,8 @@ export function VideoCard<T extends VideoCardVideo>({
           <Play className="h-12 w-12 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
         </div>
       </div>
-      <CardContent className="p-3 flex flex-col flex-1 min-h-0 overflow-hidden">
-        <div className="flex-1 min-h-0">
+      <CardContent className="px-0 py-3 flex flex-col flex-1 min-h-0 overflow-hidden">
+        <div className="flex-1 border-b px-3 min-h-0">
           <div className="flex items-start gap-1">
             <h3
               className={cn(
@@ -336,7 +378,7 @@ export function VideoCard<T extends VideoCardVideo>({
               <Link
                 href={`/library?channelId=${encodeURIComponent(video.channel.id)}`}
                 onClick={(e) => e.stopPropagation()}
-                className="hover:underline focus:underline outline-none"
+                className="hover:underline focus:underline outline-none text-sm font-medium"
                 title={video.subscriptionCategory?.name || undefined}
               >
                 {video.channel.name}
@@ -366,19 +408,8 @@ export function VideoCard<T extends VideoCardVideo>({
             </div>
           )}
         </div>
-        <div className="flex flex-wrap gap-2 mt-2 shrink-0">
-          <Button
-            size="sm"
-            variant="secondary"
-            className="flex-1 min-w-0 cursor-pointer"
-            onClick={(e) => {
-              e.stopPropagation();
-              onPlay(video);
-            }}
-          >
-            <Play className="h-3 w-3 mr-1 shrink-0" />
-            Смотреть
-          </Button>
+        <div className="flex flex-wrap gap-3 mt-2 px-3 shrink-0">
+          
           {showFavoriteButton && onFavorite && (
             <Button
               size="sm"
@@ -395,36 +426,165 @@ export function VideoCard<T extends VideoCardVideo>({
               />
             </Button>
           )}
-          {video.filePath && (
-            <Button
-              size="sm"
-              variant="ghost"
-              className="shrink-0"
-              asChild
-            >
-              <a
-                href={`/api/stream/${video.id}?download=1`}
-                target="_blank"
-                rel="noopener noreferrer"
-                title="Скачать на ПК"
+          <Button
+            size="sm"
+            variant="secondary"
+            className="flex-1 min-w-0 cursor-pointer"
+            onClick={(e) => {
+              e.stopPropagation();
+              onPlay(video);
+            }}
+          >
+            <Play className="h-3 w-3 mr-1 shrink-0" />
+            Смотреть
+          </Button>
+          {(video.filePath || onDelete || video.platformId || shareBaseUrl) && (
+            <DropdownMenu open={contextMenuOpen} onOpenChange={setContextMenuOpen}>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="shrink-0"
+                  onClick={(e) => e.stopPropagation()}
+                  title="Действия"
+                >
+                  <MoreVertical className="h-3 w-3" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
                 onClick={(e) => e.stopPropagation()}
+                onCloseAutoFocus={(e) => e.preventDefault()}
               >
-                <Download className="h-3 w-3" />
-              </a>
-            </Button>
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    <Tag className="h-4 w-4 mr-2 shrink-0" />
+                    Атрибуты
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    <DropdownMenuItem
+                      disabled={!onFavorite}
+                      className="pl-8 relative"
+                      onClick={() => {
+                        const next = !isFavoriteEffective;
+                        setFavoriteOverride(next);
+                        onFavorite?.(video, next);
+                      }}
+                    >
+                      <span className="pointer-events-none absolute left-2 flex size-3.5 items-center justify-center">
+                        <Star className={cn(
+                          'h-3.5 w-3.5',
+                          isFavoriteEffective
+                            ? 'fill-amber-500 text-amber-500'
+                            : 'text-muted-foreground'
+                        )} />
+                      </span>
+                      Избранное
+                    </DropdownMenuItem>
+                    <DropdownMenuCheckboxItem
+                      checked={isViewed}
+                      disabled={!onToggleWatched}
+                      onCheckedChange={(checked) => {
+                        setWatchedOverride(checked);
+                        onToggleWatched?.(video.id, checked);
+                      }}
+                    >
+                      Просмотрено
+                    </DropdownMenuCheckboxItem>
+                    <DropdownMenuCheckboxItem
+                      checked={isKept}
+                      disabled={!onToggleKeep}
+                      onCheckedChange={(checked) => {
+                        setPinnedOverride(checked);
+                        onToggleKeep?.(video.id, checked);
+                      }}
+                    >
+                      Не очищать
+                    </DropdownMenuCheckboxItem>
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+                <DropdownMenuSeparator />
+                {shareBaseUrl && (
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>
+                      <Share2 className="h-4 w-4 mr-2 shrink-0" />
+                      Поделиться
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                      <DropdownMenuItem
+                        onClick={() => {
+                          setContextMenuOpen(false);
+                          openTelegramShare(buildWatchUrl(shareBaseUrl, video.id), video.title);
+                        }}
+                      >
+                        <MessageCircle className="h-4 w-4 mr-2 shrink-0" />
+                        В Telegram
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() => {
+                          setContextMenuOpen(false);
+                          copyToClipboard(buildWatchUrl(shareBaseUrl, video.id));
+                        }}
+                      >
+                        <Link2 className="h-4 w-4 mr-2 shrink-0" />
+                        Скопировать ссылку
+                      </DropdownMenuItem>
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                )}
+                {video.filePath && (
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>
+                      <Download className="h-4 w-4 mr-2 shrink-0" />
+                      Скачать
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                      <DropdownMenuItem asChild>
+                        <a
+                          href={`/api/stream/${video.id}?download=1`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={() => setContextMenuOpen(false)}
+                        >
+                          <Video className="h-4 w-4 mr-2 shrink-0" />
+                          Видео
+                        </a>
+                      </DropdownMenuItem>
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                )}
+                {video.platformId && (
+                  <DropdownMenuItem asChild>
+                    <a
+                      href={`https://www.youtube.com/watch?v=${video.platformId}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={() => setContextMenuOpen(false)}
+                    >
+                      <ExternalLink className="h-4 w-4 mr-2 shrink-0" />
+                      Открыть на Youtube
+                    </a>
+                  </DropdownMenuItem>
+                )}
+                {onDelete && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      className="text-destructive focus:text-destructive"
+                      onClick={() => {
+                        setContextMenuOpen(false);
+                        onDelete(video.id);
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4 mr-2 shrink-0" />
+                      Удалить
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
-          {onDelete && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={(e) => {
-                e.stopPropagation();
-                onDelete(video.id);
-              }}
-            >
-              <Trash2 className="h-3 w-3" />
-            </Button>
-          )}
+          
         </div>
       </CardContent>
     </Card>

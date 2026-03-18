@@ -44,6 +44,7 @@ export async function POST(
 
     const result = await cleanOldVideosForSubscription(sub.id, olderThanDays, {
       skipFavoritesForUserId: session.user.id,
+      skipPinned: true,
     });
 
     return NextResponse.json({

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { signOut, useSession } from 'next-auth/react';
@@ -29,7 +29,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { cn } from '@/lib/utils';
+import { cn, formatVideoTime } from '@/lib/utils';
 import { VideoPlayer } from '@/components/video-player';
 import { MiniAudioPlayer } from '@/components/mini-audio-player';
 import { useGlobalPlayerState, useGlobalPlayerActions } from '@/lib/player-store';
@@ -39,60 +39,138 @@ function GlobalMiniPlayer() {
   const { mode, currentTrack, wasFullscreenBeforeMiniplayer } = useGlobalPlayerState();
   const { setMode, clear, updateInitialTime, setAutoPlay, setPlaybackKind } = useGlobalPlayerActions();
 
-  const isVisible = mode === 'miniplayer' && currentTrack;
-  if (!isVisible || !currentTrack) return null;
+  // Последняя известная позиция текущего трека для сохранения при закрытии/смене
+  const lastPositionRef = useRef(0);
 
-  const persistPosition = (position: number | undefined) => {
-    // Если позиции нет (мы ни разу не сохранили её в сторе), не трогаем серверное значение
-    if (position == null || !Number.isFinite(position)) return;
-    const pos = Math.floor(position);
-    const src = currentTrack.id || currentTrack.src;
-    const videoId = src.split('/').pop();
-    if (!videoId) return;
+  // Текущее время и длительность для бейджа в превью мини-плеера
+  const [miniCurrentTime, setMiniCurrentTime] = useState(0);
+  const [miniDuration, setMiniDuration] = useState(0);
+
+
+  const persistPositionById = (videoId: string, position: number) => {
+    if (!videoId || !Number.isFinite(position) || position <= 0) return;
     fetch(`/api/videos/${videoId}/watch`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ position: pos, completed: false }),
+      body: JSON.stringify({ position: Math.floor(position), completed: false }),
     }).catch(() => {});
   };
 
-  // При старте мини‑плеера подтягиваем сохранённую позицию просмотра с сервера
+  // Сохраняем позицию при смене трека или закрытии мини-плеера.
+  // Cleanup срабатывает после рендера (DOM уже обновлён), поэтому используем lastPositionRef —
+  // он обновляется в onPositionSave ещё до cleanup'а.
+  useEffect(() => {
+    const videoId = (currentTrack?.id || currentTrack?.src || '').split('/').pop();
+    lastPositionRef.current = 0;
+    return () => {
+      if (videoId && lastPositionRef.current > 0) {
+        persistPositionById(videoId, lastPositionRef.current);
+      }
+    };
+  }, [currentTrack?.id, currentTrack?.src]);
+
+  // При старте мини‑плеера:
+  // - подтягиваем сохранённую позицию просмотра с сервера
+  // - слушаем глобальное событие перемотки из окна описания
   useEffect(() => {
     if (!currentTrack) return;
     const src = currentTrack.id || currentTrack.src;
     const videoId = src.split('/').pop();
     if (!videoId) return;
+
     let cancelled = false;
-    fetch(`/api/videos/${videoId}/watch`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data: { position?: number } | null) => {
-        if (!data || cancelled) return;
-        const pos = typeof data.position === 'number' ? data.position : 0;
-        if (!Number.isFinite(pos) || pos <= 0) return;
-        updateInitialTime(Math.floor(pos));
-      })
-      .catch(() => {});
+
+    // Загрузка сохранённой позиции — пропускаем, если трек открыт с конкретным timestamp
+    if (!currentTrack.skipServerPosition) {
+      fetch(`/api/videos/${videoId}/watch`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data: { position?: number } | null) => {
+          if (!data || cancelled) return;
+          const pos = typeof data.position === 'number' ? data.position : 0;
+          if (!Number.isFinite(pos) || pos <= 0) return;
+          updateInitialTime(Math.floor(pos));
+        })
+        .catch(() => {});
+    }
+
+    // Слушаем глобальное событие перемотки
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ videoId?: string; seconds?: number }>).detail;
+      if (!detail || typeof detail.seconds !== 'number' || detail.seconds < 0) return;
+      if (detail.videoId && detail.videoId !== videoId) return;
+
+      if (typeof document === 'undefined') return;
+      const miniVideo = document.querySelector(
+        '[data-player-role="mini"] video'
+      ) as HTMLVideoElement | null;
+      if (!miniVideo) return;
+
+      // Перематываем видео напрямую, не трогая React-стор.
+      // Изменение стора вызывало ре-рендер VideoPlayer, который сбрасывал позицию обратно.
+      miniVideo.currentTime = Math.max(0, detail.seconds);
+
+      // По спецификации: после seek всегда запускать воспроизведение —
+      // и если играло (продолжить с нового места), и если стояло на паузе (начать с нового места).
+      const onSeeked = () => {
+        miniVideo.removeEventListener('seeked', onSeeked);
+        miniVideo.play().catch(() => {});
+      };
+      miniVideo.addEventListener('seeked', onSeeked);
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('global-player-seek', handler as EventListener);
+    }
+
     return () => {
       cancelled = true;
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('global-player-seek', handler as EventListener);
+      }
     };
   }, [currentTrack?.id, currentTrack?.src, updateInitialTime]);
+
+  const isVisible = mode === 'miniplayer' && currentTrack;
+  if (!isVisible || !currentTrack) return null;
+
+  const seekToChapter = (startTime: number) => {
+    const t = Math.max(0, startTime);
+    if (currentTrack.playbackKind === 'audio') {
+      const audioEl = typeof document !== 'undefined'
+        ? (document.querySelector('[data-role="mini-audio-player"] audio') as HTMLAudioElement | null)
+        : null;
+      if (audioEl) { audioEl.currentTime = t; setMiniCurrentTime(t); }
+    } else {
+      const videoEl = typeof document !== 'undefined'
+        ? (document.querySelector('[data-player-role="mini"] video') as HTMLVideoElement | null)
+        : null;
+      if (videoEl) { videoEl.currentTime = t; setMiniCurrentTime(t); }
+    }
+  };
+
+  const togglePlayPause = () => {
+    if (!currentTrack || typeof document === 'undefined') return;
+    if (currentTrack.playbackKind === 'audio') {
+      const root = document.querySelector('[data-role="mini-audio-player"]') as HTMLElement | null;
+      root?.click();
+    } else {
+      const el = document.querySelector('[data-player-role="mini"]') as HTMLElement | null;
+      el?.click();
+    }
+  };
+
+  const hasChapters = (currentTrack.chapters?.length ?? 0) > 0;
 
   return (
     <div className="fixed bottom-0 left-0 right-0 z-50 pointer-events-none">
       <div className="mx-auto max-w-6xl px-2 pb-2 pointer-events-auto">
-        <div className="bg-black/60 text-white border border-border rounded-lg shadow-lg flex items-center justify-between gap-2 p-0">
-          {/* Левая часть: превью + текст, кликабельная для Play/Pause */}
-          <button
-            type="button"
-            className="flex items-center gap-2 flex-1 min-w-0 px-2 py-1 text-left hover:bg-black/70 transition-colors"
-            onClick={() => {
-              if (!currentTrack || currentTrack.playbackKind === 'audio') return;
-              if (typeof document === 'undefined') return;
-              const el = document.querySelector('[data-player-role=\"mini\"]') as HTMLElement | null;
-              el?.click();
-            }}
+        <div className="bg-black/60 text-white border border-border rounded-lg shadow-lg flex items-stretch p-0 overflow-hidden">
+
+          {/* Превью — кликабельно для play/pause */}
+          <div
+            className="w-28 aspect-video shrink-0 relative bg-black cursor-pointer"
+            onClick={togglePlayPause}
           >
-            <div className="w-32 aspect-video bg-black rounded-md overflow-hidden shrink-0 flex items-center">
+            <div className="absolute inset-0 rounded-l-lg overflow-hidden flex items-center">
               {currentTrack.playbackKind === 'audio' && currentTrack.audioSrc ? (
                 <MiniAudioPlayer
                   src={currentTrack.audioSrc}
@@ -101,9 +179,12 @@ function GlobalMiniPlayer() {
                   poster={currentTrack.poster}
                   initialTime={currentTrack.initialTime}
                   autoPlay={currentTrack.autoPlay}
+                  onTimeUpdate={(t, d) => { setMiniCurrentTime(t); setMiniDuration(d); }}
                   onPositionSave={(pos, _completed) => {
+                    lastPositionRef.current = pos;
                     updateInitialTime(pos);
-                    persistPosition(pos);
+                    const videoId = (currentTrack.id || currentTrack.src).split('/').pop()?.split('?')[0];
+                    persistPositionById(videoId || '', pos);
                   }}
                 />
               ) : (
@@ -119,65 +200,106 @@ function GlobalMiniPlayer() {
                   fillContainer
                   mini
                   autoPlay={currentTrack.autoPlay}
+                  onTimeUpdate={(t, d) => { setMiniCurrentTime(t); setMiniDuration(d); }}
                   onPositionSave={(pos) => {
-                    updateInitialTime(pos);
-                    // Сохраняем позицию и на сервере, как в основном плеере
-                    persistPosition(pos);
+                    lastPositionRef.current = pos;
+                    const videoEl = typeof document !== 'undefined'
+                      ? (document.querySelector('[data-player-role="mini"] video') as HTMLVideoElement | null)
+                      : null;
+                    const actualSrc = videoEl?.currentSrc || '';
+                    const trackSrc = currentTrack.id || currentTrack.src;
+                    const actualId = actualSrc.split('/').pop()?.split('?')[0];
+                    const trackId = trackSrc.split('/').pop()?.split('?')[0];
+                    if (!actualId || actualId === trackId) updateInitialTime(pos);
+                    persistPositionById(actualId || trackId || '', pos);
                   }}
                 />
               )}
             </div>
-            <div className="flex-1 min-w-0 flex flex-col gap-0.5">
-              <div
-                className="text-sm font-medium truncate"
-                onClick={(e) => {
-                  if (!currentTrack || currentTrack.playbackKind !== 'audio') return;
-                  e.stopPropagation();
-                  const root = document.querySelector(
-                    '[data-role=\"mini-audio-player\"]'
-                  ) as HTMLElement | null;
-                  root?.click();
-                }}
-              >
-                {currentTrack.title}
+            {/* Бейдж времени — только информационный */}
+            {miniDuration > 0 && (
+              <div className="absolute bottom-0.5 left-1/2 -translate-x-1/2 z-10 bg-black/50 rounded px-1 py-0.5 text-[10px] text-white tabular-nums leading-none pointer-events-none select-none whitespace-nowrap">
+                {formatVideoTime(miniCurrentTime, miniDuration)}
+                <span className="text-white/60 mx-0.5">/</span>
+                {formatVideoTime(miniDuration, miniDuration)}
               </div>
-              {currentTrack.channelName && (
-                <div className="text-xs truncate">
-                  {currentTrack.channelName}
-                </div>
-              )}
-            </div>
-          </button>
+            )}
+          </div>
 
-          {/* Правая часть: управление режимами */}
-          <div className="flex items-center gap-1 pr-2">
+          {/* Центр: заголовок + канал.
+              Если есть тайм-коды — клик открывает меню эпизодов.
+              Иначе — клик play/pause. */}
+          <div className="flex-1 min-w-0 flex flex-col justify-center gap-0.5 px-3 py-2">
+            {hasChapters ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    className="cursor-pointer select-none outline-none group"
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') e.currentTarget.click(); }}
+                  >
+                    <div className="text-sm font-medium leading-tight line-clamp-2 group-hover:text-white/75 transition-colors">
+                      {currentTrack.title}
+                    </div>
+                    {currentTrack.channelName && (
+                      <div className="text-xs text-white/50 truncate">{currentTrack.channelName}</div>
+                    )}
+                  </div>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  align="start"
+                  side="top"
+                  className="max-h-[280px] w-[300px] overflow-y-auto text-xs bg-black/90 text-white border border-white/20 shadow-lg rounded-md backdrop-blur-sm"
+                >
+                  {currentTrack.chapters!.map((ch, idx) => (
+                    <DropdownMenuItem
+                      key={`${ch.startTime}-${idx}`}
+                      className="flex items-start gap-2 py-1.5 px-2 rounded-sm focus:bg-white/15 focus:text-white data-highlighted:bg-white/15 data-highlighted:text-white cursor-pointer"
+                      onClick={() => seekToChapter(ch.startTime ?? 0)}
+                    >
+                      <span className="font-mono text-white/60 shrink-0 text-[11px] pt-px">
+                        {formatVideoTime(ch.startTime ?? 0, miniDuration)}
+                      </span>
+                      <span className="text-white/90 line-clamp-2 wrap-break-word">
+                        {ch.title || '\u00A0'}
+                      </span>
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : (
+              <div
+                className="cursor-pointer group"
+                onClick={togglePlayPause}
+              >
+                <div className="text-sm font-medium leading-tight line-clamp-2 group-hover:text-white/75 transition-colors">
+                  {currentTrack.title}
+                </div>
+                {currentTrack.channelName && (
+                  <div className="text-xs text-white/50 truncate">{currentTrack.channelName}</div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Правая часть: кнопки по центру высоты */}
+          <div className="flex items-center gap-0.5 pr-2 shrink-0">
+            {/* Переключатель видео/аудио */}
             {currentTrack.audioSrc && (
               <Button
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8"
                 title="Переключить режим Видео/Аудио"
-                onClick={() => {
-                  const next =
-                    currentTrack.playbackKind === 'audio'
-                      ? 'video'
-                      : 'audio';
-                  setPlaybackKind(next);
-                  setAutoPlay(true);
-                }}
-                aria-label={
-                  currentTrack.playbackKind === 'audio'
-                    ? 'Переключить на видео'
-                    : 'Переключить на аудио'
-                }
+                onClick={() => { setPlaybackKind(currentTrack.playbackKind === 'audio' ? 'video' : 'audio'); setAutoPlay(true); }}
+                aria-label={currentTrack.playbackKind === 'audio' ? 'Переключить на видео' : 'Переключить на аудио'}
               >
-                {currentTrack.playbackKind === 'audio' ? (
-                  <Video className="h-4 w-4" />
-                ) : (
-                  <Music2 className="h-4 w-4" />
-                )}
+                {currentTrack.playbackKind === 'audio' ? <Video className="h-4 w-4" /> : <Music2 className="h-4 w-4" />}
               </Button>
             )}
+
+            {/* Развернуть */}
             <Button
               variant="ghost"
               size="icon"
@@ -185,30 +307,26 @@ function GlobalMiniPlayer() {
               title="Развернуть"
               onClick={() => {
                 const shouldFullscreen = wasFullscreenBeforeMiniplayer;
-                // при разворачивании всегда хотим продолжить воспроизведение
                 setAutoPlay(true);
                 setMode('embedded');
                 if (typeof document !== 'undefined' && shouldFullscreen) {
-                  // Даём странице время смонтировать основной плеер
                   setTimeout(() => {
-                    const el = document.querySelector('[data-player-role=\"primary\"]') as HTMLElement | null;
-                    if (el) {
-                      el.requestFullscreen().catch(() => {});
-                    }
+                    const el = document.querySelector('[data-player-role="primary"]') as HTMLElement | null;
+                    el?.requestFullscreen().catch(() => {});
                   }, 0);
                 }
               }}
             >
               <Maximize2 className="h-4 w-4" />
             </Button>
+
+            {/* Закрыть */}
             <Button
               variant="ghost"
               size="icon"
               className="h-8 w-8"
               title="Закрыть"
               onClick={() => {
-                // При закрытии мини-плеера явно сохраняем последнюю известную позицию
-                persistPosition(currentTrack.initialTime);
                 clear();
                 if (typeof window !== 'undefined') {
                   window.dispatchEvent(new CustomEvent('global-mini-player-close'));
@@ -218,6 +336,7 @@ function GlobalMiniPlayer() {
               <X className="h-4 w-4" />
             </Button>
           </div>
+
         </div>
       </div>
     </div>
@@ -495,7 +614,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           isMiniPlayerVisible && 'pb-28'
         )}
       >
-        <div className="p-4 lg:px-6 lg:pb-6 lg:pt-0">{children}</div>
+        <div className="p-2 lg:px-4 lg:pb-4 lg:pt-0">{children}</div>
       </main>
       <GlobalMiniPlayer />
     </div>

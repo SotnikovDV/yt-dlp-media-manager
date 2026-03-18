@@ -49,6 +49,7 @@ export async function GET(request: NextRequest) {
             channel: true,
             watchHistory: userId ? { where: { userId }, take: 1 } : false,
             favorites: userId ? { where: { userId }, take: 1 } : false,
+            pins: userId ? { where: { userId }, take: 1 } : false,
           },
         });
         const byId = new Map(videosById.map((v) => [v.id, v]));
@@ -92,6 +93,7 @@ export async function GET(request: NextRequest) {
                 channel: true,
                 watchHistory: userId ? { where: { userId }, take: 1 } : false,
                 favorites: userId ? { where: { userId }, take: 1 } : false,
+                pins: userId ? { where: { userId }, take: 1 } : false,
               },
             },
           },
@@ -107,6 +109,45 @@ export async function GET(request: NextRequest) {
             limit,
             total: totalFav,
             totalPages: Math.ceil(totalFav / limit),
+          },
+        })
+      );
+    } else if (channelId === '__recentWatched__') {
+      if (!session?.user?.id) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      }
+      const watchedWhere = {
+        userId: session.user.id,
+        video: { filePath: { not: null } },
+      };
+      const [watchedRecords, totalWatched] = await Promise.all([
+        db.watchHistory.findMany({
+          where: watchedWhere,
+          orderBy: { lastWatchedAt: 'desc' },
+          skip,
+          take: limit,
+          include: {
+            video: {
+              include: {
+                channel: true,
+                watchHistory: { where: { userId: session.user.id }, take: 1 },
+                favorites: { where: { userId: session.user.id }, take: 1 },
+                pins: { where: { userId: session.user.id }, take: 1 },
+              },
+            },
+          },
+        }),
+        db.watchHistory.count({ where: watchedWhere }),
+      ]);
+      const videos = watchedRecords.map((r) => r.video).filter(Boolean);
+      return NextResponse.json(
+        jsonSafe({
+          videos,
+          pagination: {
+            page,
+            limit,
+            total: totalWatched,
+            totalPages: Math.ceil(totalWatched / limit),
           },
         })
       );
@@ -162,6 +203,7 @@ export async function GET(request: NextRequest) {
           channel: true,
           watchHistory: userId ? { where: { userId }, take: 1 } : false,
           favorites: userId ? { where: { userId }, take: 1 } : false,
+          pins: userId ? { where: { userId }, take: 1 } : false,
         },
         orderBy,
         skip,

@@ -29,8 +29,8 @@ export async function PUT(request: NextRequest) {
       create: { key: 'queuePaused', value: paused ? 'true' : 'false' },
       update: { value: paused ? 'true' : 'false' },
     });
-    // При глобальной паузе останавливаем текущие загрузки и переводим задачи в paused
     if (paused) {
+      // При глобальной паузе останавливаем текущие загрузки и переводим задачи в paused
       const running = await db.downloadTask.findMany({
         where: { status: { in: ['downloading', 'processing'] } },
         select: { id: true },
@@ -46,6 +46,12 @@ export async function PUT(request: NextRequest) {
           data: { status: 'paused' },
         });
       }
+    } else {
+      // При снятии глобальной паузы возвращаем все paused-задачи в очередь
+      await db.downloadTask.updateMany({
+        where: { status: 'paused' },
+        data: { status: 'pending', startedAt: null },
+      });
     }
     return NextResponse.json({ success: true, paused });
   } catch (error) {
