@@ -77,4 +77,5 @@ server.log
 
 # Design / IDE backups
 .design-backup
+.cursor/
 mcps

@@ -158,7 +158,6 @@ export default function ProfilePage() {
           <div className="flex items-center gap-4">
             <div className="w-16 h-16 rounded-full bg-muted overflow-hidden flex items-center justify-center">
               {profile?.avatarUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
                 <img src={avatarSrc} alt="avatar" className="w-full h-full object-cover" />
               ) : (
                 <span className="text-xs text-muted-foreground">Нет</span>

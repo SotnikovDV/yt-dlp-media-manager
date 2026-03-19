@@ -69,7 +69,8 @@ export async function checkSubscription(sub: SubscriptionWithChannel): Promise<C
     const downloadedSet = new Set(downloadedVideos.map((v) => v.platformId));
     const rejectedSet = new Set(rejectedRows.map((r) => r.platformId));
     const activeStatuses = new Set(['pending', 'downloading', 'processing', 'paused']);
-    const score = (status: string) => (activeStatuses.has(status) ? 3 : status === 'failed' ? 2 : 1);
+    const score = (status: string) =>
+      activeStatuses.has(status) ? 3 : status === 'failed' || status === 'rejected' ? 2 : 1;
 
     const taskByUrl = new Map<
       string,
@@ -111,7 +112,13 @@ export async function checkSubscription(sub: SubscriptionWithChannel): Promise<C
       if (existingTask && existingTask.status === 'failed') {
         await db.downloadTask.update({
           where: { id: existingTask.id },
-          data: { status: 'pending', errorMsg: null, progress: 0 },
+          data: {
+            status: 'pending',
+            errorMsg: null,
+            progress: 0,
+            subscriptionId: sub.id,
+            isAutoSubscriptionTask: true,
+          },
         });
       } else if (!existingTask) {
         await db.downloadTask.create({
@@ -122,6 +129,7 @@ export async function checkSubscription(sub: SubscriptionWithChannel): Promise<C
             format: 'mp4',
             status: 'pending',
             subscriptionId: sub.id,
+            isAutoSubscriptionTask: true,
           },
         });
       }

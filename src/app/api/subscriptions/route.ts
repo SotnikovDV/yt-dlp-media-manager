@@ -44,6 +44,8 @@ async function enqueueBackfill(subscriptionId: string) {
           quality: sub.preferredQuality || 'best',
           format: 'mp4',
           status: 'pending',
+          subscriptionId: sub.id,
+          isAutoSubscriptionTask: true,
         },
       });
     }

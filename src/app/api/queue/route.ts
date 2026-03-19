@@ -124,7 +124,7 @@ async function fetchQueueData() {
 
   const recentCompleted = await db.downloadTask.findMany({
     where: {
-      status: { in: ['completed', 'failed'] }
+      status: { in: ['completed', 'failed', 'rejected'] }
     },
     include: {
       video: {

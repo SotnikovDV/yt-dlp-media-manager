@@ -62,10 +62,11 @@ export async function GET(request: NextRequest) {
       channel: true,
       watchHistory: true,
       favorites: { where: { userId: session.user.id }, take: 1 } as const,
+      bookmarks: { where: { userId: session.user.id }, take: 1 } as const,
       pins: { where: { userId: session.user.id }, take: 1 } as const,
     };
 
-    const [recentPublished, recentDownloaded, watchedRecords, favoriteRecords, individualRecords] = await Promise.all([
+    const [recentPublished, recentDownloaded, watchedRecords, favoriteRecords, bookmarkRecords, individualRecords] = await Promise.all([
       db.video.findMany({
         where: { ...videoWhereClause, publishedAt: { not: null } },
         include: videoInclude,
@@ -110,6 +111,16 @@ export async function GET(request: NextRequest) {
           },
         },
       }),
+      db.bookmark.findMany({
+        where: { userId: session.user.id },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+        include: {
+          video: {
+            include: videoInclude,
+          },
+        },
+      }),
       db.userIndividualVideo.findMany({
         where: {
           userId: session.user.id,
@@ -131,6 +142,10 @@ export async function GET(request: NextRequest) {
 
     const favorites = favoriteRecords
       .map((f) => f.video)
+      .filter((v): v is NonNullable<typeof v> => v != null && v.filePath != null);
+
+    const bookmarks = bookmarkRecords
+      .map((b) => b.video)
       .filter((v): v is NonNullable<typeof v> => v != null && v.filePath != null);
 
     const individualVideos = individualRecords
@@ -215,6 +230,7 @@ export async function GET(request: NextRequest) {
         recentDownloaded,
         recentWatched,
         favorites,
+        bookmarks,
         individualVideos,
         categorySections,
         recentLimit: limit,

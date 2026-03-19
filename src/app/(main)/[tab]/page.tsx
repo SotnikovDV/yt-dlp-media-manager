@@ -14,6 +14,7 @@ import {
   useMemo,
   Suspense,
 } from "react";
+import { createPortal } from "react-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import Link from "next/link";
@@ -377,12 +378,13 @@ interface StatsType {
   } | null;
 }
 
-/** Ответ API секций медиатеки: блоки «недавние», избранное, отдельные видео, по категориям. */
+/** Ответ API секций медиатеки: блоки «недавние», избранное, закрепленные, отдельные видео, по категориям. */
 type LibrarySectionsResponse = {
   recentPublished: VideoType[];
   recentDownloaded: VideoType[];
   recentWatched: VideoType[];
   favorites: VideoType[];
+  bookmarks: VideoType[];
   individualVideos: VideoType[];
   categorySections?: {
     categoryId: string | null;
@@ -469,6 +471,14 @@ const api = {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ isFavorite }),
+      });
+      return jsonOrThrow(res);
+    },
+    setBookmark: async (id: string, isBookmarked: boolean) => {
+      const res = await fetch(`/api/videos/${id}/bookmark`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isBookmarked }),
       });
       return jsonOrThrow(res);
     },
@@ -1392,6 +1402,24 @@ function MediaManagerContent() {
   const [subscriptionAutoDeleteDays, setSubscriptionAutoDeleteDays] =
     useState(30);
   const [subscriptionQuality, setSubscriptionQuality] = useState("best");
+
+  // Контент страницы подставляется внутрь слота мобильного меню `AppShell`
+  // через createPortal (нужно, чтобы обработчики оставались в этой странице).
+  const [mobileActionsTargetEl, setMobileActionsTargetEl] = useState<
+    HTMLElement | null
+  >(null);
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    setMobileActionsTargetEl(
+      document.getElementById("mobile-actions-slot"),
+    );
+  }, []);
+
+  const closeMobileMenu = () => {
+    if (typeof window === "undefined") return;
+    window.dispatchEvent(new CustomEvent("global-mobile-menu-close"));
+  };
+
   const [newSubscriptionCategoryId, setNewSubscriptionCategoryId] = useState<
     string | null
   >(null);
@@ -1425,6 +1453,7 @@ function MediaManagerContent() {
     string | null
   >(null);
   const [libraryOpenedFavorites, setLibraryOpenedFavorites] = useState(false);
+  const [libraryOpenedBookmarks, setLibraryOpenedBookmarks] = useState(false);
   const [librarySelectedTagId, setLibrarySelectedTagId] = useState<
     string | null
   >(null);
@@ -1438,6 +1467,7 @@ function MediaManagerContent() {
     const categoryIdFromUrl = searchParams.get("categoryId");
     const playlistIdFromUrl = searchParams.get("playlistId");
     const favoritesFromUrl = searchParams.get("favorites");
+    const bookmarksFromUrl = searchParams.get("bookmarks");
     const tagIdFromUrl = searchParams.get("tagId");
     const recentSectionFromUrl = searchParams.get("recentSection");
     const fromTabFromUrl = searchParams.get("fromTab");
@@ -1455,6 +1485,7 @@ function MediaManagerContent() {
       setLibraryOpenedCategoryKey(null);
       setLibraryOpenedPlaylistId(null);
       setLibraryOpenedFavorites(false);
+      setLibraryOpenedBookmarks(false);
       setLibrarySelectedTagId(tagIdFromUrl);
       setLibraryOpenedRecentSection(null);
     } else if (channelIdFromUrl) {
@@ -1462,6 +1493,7 @@ function MediaManagerContent() {
       setLibraryOpenedCategoryKey(null);
       setLibraryOpenedPlaylistId(null);
       setLibraryOpenedFavorites(false);
+      setLibraryOpenedBookmarks(false);
       setLibrarySelectedTagId(null);
       setLibraryOpenedRecentSection(null);
     } else if (categoryIdFromUrl) {
@@ -1469,6 +1501,7 @@ function MediaManagerContent() {
       setLibraryOpenedCategoryKey(categoryIdFromUrl);
       setLibraryOpenedPlaylistId(null);
       setLibraryOpenedFavorites(false);
+      setLibraryOpenedBookmarks(false);
       setLibrarySelectedTagId(null);
       setLibraryOpenedRecentSection(null);
     } else if (playlistIdFromUrl) {
@@ -1476,6 +1509,7 @@ function MediaManagerContent() {
       setLibraryOpenedCategoryKey(null);
       setLibraryOpenedPlaylistId(playlistIdFromUrl);
       setLibraryOpenedFavorites(false);
+      setLibraryOpenedBookmarks(false);
       setLibrarySelectedTagId(null);
       setLibraryOpenedRecentSection(null);
     } else if (favoritesFromUrl === "1") {
@@ -1483,6 +1517,15 @@ function MediaManagerContent() {
       setLibraryOpenedCategoryKey(null);
       setLibraryOpenedPlaylistId(null);
       setLibraryOpenedFavorites(true);
+      setLibraryOpenedBookmarks(false);
+      setLibrarySelectedTagId(null);
+      setLibraryOpenedRecentSection(null);
+    } else if (bookmarksFromUrl === "1") {
+      setLibrarySelectedChannelId(null);
+      setLibraryOpenedCategoryKey(null);
+      setLibraryOpenedPlaylistId(null);
+      setLibraryOpenedFavorites(false);
+      setLibraryOpenedBookmarks(true);
       setLibrarySelectedTagId(null);
       setLibraryOpenedRecentSection(null);
     } else if (
@@ -1494,6 +1537,7 @@ function MediaManagerContent() {
       setLibraryOpenedCategoryKey(null);
       setLibraryOpenedPlaylistId(null);
       setLibraryOpenedFavorites(false);
+      setLibraryOpenedBookmarks(false);
       setLibrarySelectedTagId(null);
       setLibraryOpenedRecentSection(recentSectionFromUrl);
     } else {
@@ -1501,6 +1545,7 @@ function MediaManagerContent() {
       setLibraryOpenedCategoryKey(null);
       setLibraryOpenedPlaylistId(null);
       setLibraryOpenedFavorites(false);
+      setLibraryOpenedBookmarks(false);
       setLibrarySelectedTagId(null);
       setLibraryOpenedRecentSection(null);
     }
@@ -1512,6 +1557,7 @@ function MediaManagerContent() {
     "recentPublished",
     "recentDownloaded",
     "recentWatched",
+    "bookmarks",
     "favorites",
     "librarySubscriptions",
     "libraryIndividualVideos",
@@ -1521,6 +1567,7 @@ function MediaManagerContent() {
     recentPublished: true,
     recentDownloaded: true,
     recentWatched: true,
+    bookmarks: true,
     favorites: true,
     librarySubscriptions: true,
     libraryIndividualVideos: true,
@@ -1538,6 +1585,7 @@ function MediaManagerContent() {
         recentPublished: parsed.recentPublished !== false,
         recentDownloaded: parsed.recentDownloaded !== false,
         recentWatched: parsed.recentWatched !== false,
+        bookmarks: parsed.bookmarks !== false,
         favorites: parsed.favorites !== false,
         librarySubscriptions: parsed.librarySubscriptions !== false,
         libraryIndividualVideos: parsed.libraryIndividualVideos !== false,
@@ -1553,6 +1601,7 @@ function MediaManagerContent() {
         | "recentPublished"
         | "recentDownloaded"
         | "recentWatched"
+        | "bookmarks"
         | "favorites"
         | "librarySubscriptions"
         | "libraryIndividualVideos"
@@ -1816,6 +1865,7 @@ function MediaManagerContent() {
     libraryOpenedCategoryKey,
     libraryOpenedPlaylistId,
     libraryOpenedFavorites,
+    libraryOpenedBookmarks,
     librarySelectedTagId,
     libraryOpenedRecentSection,
     searchQuery,
@@ -1829,6 +1879,7 @@ function MediaManagerContent() {
       !libraryOpenedCategoryKey &&
       !libraryOpenedPlaylistId &&
       !libraryOpenedFavorites &&
+      !libraryOpenedBookmarks &&
       !librarySelectedTagId &&
       !libraryOpenedRecentSection
     )
@@ -1839,6 +1890,7 @@ function MediaManagerContent() {
     libraryOpenedCategoryKey,
     libraryOpenedPlaylistId,
     libraryOpenedFavorites,
+    libraryOpenedBookmarks,
     librarySelectedTagId,
     libraryOpenedRecentSection,
   ]);
@@ -1848,6 +1900,7 @@ function MediaManagerContent() {
     !!libraryOpenedCategoryKey ||
     !!libraryOpenedPlaylistId ||
     libraryOpenedFavorites ||
+    libraryOpenedBookmarks ||
     !!librarySelectedTagId ||
     !!libraryOpenedRecentSection ||
     !!searchQuery;
@@ -1864,6 +1917,7 @@ function MediaManagerContent() {
       libraryOpenedCategoryKey,
       libraryOpenedPlaylistId,
       libraryOpenedFavorites,
+      libraryOpenedBookmarks,
       librarySelectedTagId,
       libraryOpenedRecentSection,
       libraryVideosPage,
@@ -1934,6 +1988,7 @@ function MediaManagerContent() {
         !libraryOpenedCategoryKey &&
         !libraryOpenedPlaylistId &&
         !libraryOpenedFavorites &&
+        !libraryOpenedBookmarks &&
         !librarySelectedTagId &&
         !searchQuery,
     });
@@ -2564,6 +2619,33 @@ function MediaManagerContent() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const bookmarkMutation = useMutation({
+    mutationFn: ({
+      id,
+      isBookmarked,
+    }: {
+      id: string;
+      isBookmarked: boolean;
+    }) => api.videos.setBookmark(id, isBookmarked),
+    onSuccess: (_, { isBookmarked }) => {
+      queryClient.invalidateQueries({ queryKey: ["videos"] });
+      queryClient.invalidateQueries({ queryKey: ["videos-sections"] });
+      toast.success(
+        isBookmarked ? "Закреплено" : "Убрано из закреплённых",
+      );
+    },
+    onError: (e: Error & { data?: { limitReached?: boolean } }) => {
+      const data = (e as any)?.data;
+      if (data?.limitReached) {
+        toast.error(
+          "Список «Закрепленные» заполнен. Удалите одно видео из списка, чтобы добавить новое.",
+        );
+      } else {
+        toast.error(e.message);
+      }
+    },
+  });
+
   const watchedMutation = useMutation({
     mutationFn: ({ id, completed }: { id: string; completed: boolean }) =>
       api.videos.setWatched(id, completed),
@@ -2798,6 +2880,54 @@ function MediaManagerContent() {
         </Alert>
       )}
 
+      {mobileActionsTargetEl &&
+        createPortal(
+          <div className="space-y-4">
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full justify-start"
+              onClick={() => {
+                closeMobileMenu();
+                setDownloadDialogOpen(true);
+              }}
+            >
+              <DownloadIcon className="mr-2 h-4 w-4" />
+              Скачать видео
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full justify-start"
+              onClick={() => {
+                closeMobileMenu();
+                setSubscriptionDialogOpen(true);
+              }}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Добавить подписку
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full justify-start"
+              onClick={() => {
+                closeMobileMenu();
+                checkSubscriptionsMutation.mutate();
+              }}
+              disabled={checkSubscriptionsMutation.isPending}
+            >
+              {checkSubscriptionsMutation.isPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-2 h-4 w-4" />
+              )}
+              Проверить обновления
+            </Button>
+          </div>,
+          mobileActionsTargetEl,
+        )}
+
       {/* Вкладка «Медиатека»: секции или список видео канала/поиска */}
       {activeTab === "library" && (
         <div className="space-y-6">
@@ -2900,40 +3030,6 @@ function MediaManagerContent() {
                   Скачать видео
                 </Button>
               </div>
-              {/* Мобайл: главная кнопка + dropdown */}
-              <div className="flex sm:hidden gap-2 w-full">
-                <Button
-                  className="flex-1 bg-primary hover:bg-primary/90 text-primary-foreground"
-                  onClick={() => setDownloadDialogOpen(true)}
-                >
-                  <Plus className="mr-2 h-4 w-4" />
-                  Скачать видео
-                </Button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="icon">
-                      <MoreHorizontal className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem
-                      onClick={() => checkSubscriptionsMutation.mutate()}
-                      disabled={checkSubscriptionsMutation.isPending}
-                    >
-                      {checkSubscriptionsMutation.isPending ? (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      ) : (
-                        <RefreshCw className="mr-2 h-4 w-4" />
-                      )}
-                      Проверить обновления
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setSubscriptionDialogOpen(true)}>
-                      <Plus className="mr-2 h-4 w-4" />
-                      Добавить подписку
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
             </div>
           </div>
 
@@ -2942,6 +3038,9 @@ function MediaManagerContent() {
             <>
               {libraryOpenedFavorites && (
                 <h2 className="text-lg font-semibold">Избранное</h2>
+              )}
+              {libraryOpenedBookmarks && (
+                <h2 className="text-lg font-semibold">Закрепленные</h2>
               )}
               {libraryOpenedRecentSection && (
                 <h2 className="text-lg font-semibold">
@@ -3278,6 +3377,15 @@ function MediaManagerContent() {
                                         })
                                     : undefined
                                 }
+                                onBookmark={
+                                  session?.user
+                                    ? (v, isBm) =>
+                                        bookmarkMutation.mutate({
+                                          id: v.id,
+                                          isBookmarked: isBm,
+                                        })
+                                    : undefined
+                                }
                                 showFavoriteButton={!!session?.user}
                                 shareBaseUrl={
                                   (stats as StatsType)?.baseUrl ??
@@ -3343,9 +3451,11 @@ function MediaManagerContent() {
                             onPlay={(v) =>
                               openVideoInQueue(
                                 v as VideoType,
-                                libraryOpenedFavorites
-                                  ? { kind: "favorites" }
-                                  : librarySelectedChannelId
+                                libraryOpenedBookmarks
+                                  ? { kind: "bookmarks" }
+                                  : libraryOpenedFavorites
+                                    ? { kind: "favorites" }
+                                    : librarySelectedChannelId
                                     ? {
                                         kind: "channel",
                                         channelId: librarySelectedChannelId,
@@ -3370,6 +3480,15 @@ function MediaManagerContent() {
                                     favoriteMutation.mutate({
                                       id: v.id,
                                       isFavorite: isFav,
+                                    })
+                                : undefined
+                            }
+                            onBookmark={
+                              session?.user
+                                ? (v, isBm) =>
+                                    bookmarkMutation.mutate({
+                                      id: v.id,
+                                      isBookmarked: isBm,
                                     })
                                 : undefined
                             }
@@ -3688,6 +3807,15 @@ function MediaManagerContent() {
                                       })
                                   : undefined
                               }
+                              onBookmark={
+                                session?.user
+                                  ? (v, isBm) =>
+                                      bookmarkMutation.mutate({
+                                        id: v.id,
+                                        isBookmarked: isBm,
+                                      })
+                                  : undefined
+                              }
                               showFavoriteButton={!!session?.user}
                               shareBaseUrl={
                                 (stats as StatsType)?.baseUrl ??
@@ -3857,6 +3985,15 @@ function MediaManagerContent() {
                                       favoriteMutation.mutate({
                                         id: v.id,
                                         isFavorite: isFav,
+                                      })
+                                  : undefined
+                              }
+                              onBookmark={
+                                session?.user
+                                  ? (v, isBm) =>
+                                      bookmarkMutation.mutate({
+                                        id: v.id,
+                                        isBookmarked: isBm,
                                       })
                                   : undefined
                               }
@@ -4032,6 +4169,15 @@ function MediaManagerContent() {
                                       })
                                   : undefined
                               }
+                              onBookmark={
+                                session?.user
+                                  ? (v, isBm) =>
+                                      bookmarkMutation.mutate({
+                                        id: v.id,
+                                        isBookmarked: isBm,
+                                      })
+                                  : undefined
+                              }
                               showFavoriteButton={!!session?.user}
                               shareBaseUrl={
                                 (stats as StatsType)?.baseUrl ??
@@ -4102,6 +4248,187 @@ function MediaManagerContent() {
                           setLibraryOpenedRecentSection("watched");
                           const params = new URLSearchParams();
                           params.set("recentSection", "watched");
+                          router.replace(`/library?${params.toString()}`);
+                        }}
+                      >
+                        Показать все
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                </div>
+
+                {/* Закрепленные */}
+                <div>
+                  <div className="flex items-center gap-2 -mx-4 w-[calc(100%+2rem)] px-4 py-2 bg-muted/30 border-b border-border lg:-mx-6 lg:w-[calc(100%+3rem)] lg:px-6">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSectionCollapsed(
+                          "bookmarks",
+                          !sectionsCollapsed.bookmarks,
+                        )
+                      }
+                      className="flex items-center gap-2 flex-1 min-w-0 text-left group cursor-pointer hover:opacity-80"
+                    >
+                      {sectionsCollapsed.bookmarks ? (
+                        <ChevronRight className="h-5 w-5 text-muted-foreground shrink-0" />
+                      ) : (
+                        <ChevronDown className="h-5 w-5 text-muted-foreground shrink-0" />
+                      )}
+                      <h3 className="text-base font-semibold flex-1 min-w-0 truncate">
+                        Закрепленные
+                      </h3>
+                    </button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-8 w-8 p-0 shrink-0"
+                      title="Открыть подборку"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setLibrarySelectedChannelId(null);
+                        setLibraryOpenedCategoryKey(null);
+                        setLibraryOpenedPlaylistId(null);
+                        setLibraryOpenedFavorites(false);
+                        setLibraryOpenedBookmarks(true);
+                        setLibrarySelectedTagId(null);
+                        setSearchQuery("");
+                        setLibraryOpenedRecentSection(null);
+                        const params = new URLSearchParams();
+                        params.set("bookmarks", "1");
+                        router.replace(`/library?${params.toString()}`);
+                      }}
+                    >
+                      <FolderOpen className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  {!sectionsCollapsed.bookmarks && (
+                  <div className="-mx-4 px-4 py-4 bg-muted/80 lg:-mx-6 lg:px-6">
+                    {sectionsLoading ? (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                          {[...Array(6)].map((_, i) => (
+                            <Card key={i} className="overflow-hidden">
+                              <div className="aspect-video bg-muted animate-pulse" />
+                              <CardContent className="p-3">
+                                <div className="h-4 bg-muted rounded animate-pulse" />
+                              </CardContent>
+                            </Card>
+                          ))}
+                        </div>
+                      ) : (sectionsData?.bookmarks?.length ?? 0) > 0 ? (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                          {(sectionsData?.bookmarks ?? []).map(
+                            (video: VideoType, idx: number) => (
+                              <VideoCard
+                                key={video.id}
+                                video={
+                                  {
+                                    ...(video as VideoCardVideo),
+                                    subscriptionCategory:
+                                      video.channel?.id
+                                        ? subscriptionCategoryByChannelId.get(
+                                            video.channel.id,
+                                          ) ?? null
+                                        : null,
+                                  } as VideoCardVideo
+                                }
+                                onShowDescription={handleShowDescription}
+                                onPlay={(v) =>
+                                  openVideoInQueue(
+                                    v as VideoType,
+                                    { kind: "bookmarks" },
+                                    sectionsData!.bookmarks,
+                                    idx,
+                                  )
+                                }
+                                onFavorite={
+                                  session?.user
+                                    ? (v, isFav) =>
+                                        favoriteMutation.mutate({
+                                          id: v.id,
+                                          isFavorite: isFav,
+                                        })
+                                    : undefined
+                                }
+                                onBookmark={
+                                  session?.user
+                                    ? (v, isBm) =>
+                                        bookmarkMutation.mutate({
+                                          id: v.id,
+                                          isBookmarked: isBm,
+                                        })
+                                    : undefined
+                                }
+                                showFavoriteButton={!!session?.user}
+                                shareBaseUrl={
+                                  (stats as StatsType)?.baseUrl ??
+                                  (typeof window !== "undefined"
+                                    ? window.location.origin
+                                    : "")
+                                }
+                                playlists={session?.user ? playlists : undefined}
+                                onAddToPlaylist={
+                                  session?.user
+                                    ? handleAddVideoToPlaylist
+                                    : undefined
+                                }
+                                onRemoveFromPlaylist={
+                                  session?.user
+                                    ? handleRemoveVideoFromPlaylist
+                                    : undefined
+                                }
+                                onCreatePlaylistAndAdd={
+                                  session?.user
+                                    ? handleCreatePlaylistAndAddVideo
+                                    : undefined
+                                }
+                                onDelete={(id) => setDeleteVideoId(id)}
+                                onToggleWatched={
+                                  session?.user
+                                    ? (videoId, completed) =>
+                                        watchedMutation.mutate({ id: videoId, completed })
+                                    : undefined
+                                }
+                                onToggleKeep={
+                                  session?.user
+                                    ? (videoId, pinned) =>
+                                        pinMutation.mutate({ id: videoId, pinned })
+                                    : undefined
+                                }
+                              />
+                            ),
+                          )}
+                        </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground py-2">
+                        Пока нет закрепленных видео
+                      </p>
+                    )}
+                    <div className="mt-4 flex justify-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-muted-foreground border-border/70"
+                        onClick={() => setSectionCollapsed("bookmarks", true)}
+                      >
+                        Свернуть
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-muted-foreground border-border/70"
+                        onClick={() => {
+                          setLibrarySelectedChannelId(null);
+                          setLibraryOpenedCategoryKey(null);
+                          setLibraryOpenedPlaylistId(null);
+                          setLibraryOpenedFavorites(false);
+                          setLibraryOpenedBookmarks(true);
+                          setLibrarySelectedTagId(null);
+                          setSearchQuery("");
+                          setLibraryOpenedRecentSection(null);
+                          const params = new URLSearchParams();
+                          params.set("bookmarks", "1");
                           router.replace(`/library?${params.toString()}`);
                         }}
                       >
@@ -4199,6 +4526,15 @@ function MediaManagerContent() {
                                         favoriteMutation.mutate({
                                           id: v.id,
                                           isFavorite: isFav,
+                                        })
+                                    : undefined
+                                }
+                                onBookmark={
+                                  session?.user
+                                    ? (v, isBm) =>
+                                        bookmarkMutation.mutate({
+                                          id: v.id,
+                                          isBookmarked: isBm,
                                         })
                                     : undefined
                                 }
@@ -4410,6 +4746,15 @@ function MediaManagerContent() {
                                               })
                                           : undefined
                                       }
+                                      onBookmark={
+                                        session?.user
+                                          ? (v, isBm) =>
+                                              bookmarkMutation.mutate({
+                                                id: v.id,
+                                                isBookmarked: isBm,
+                                              })
+                                          : undefined
+                                      }
                                       showFavoriteButton={!!session?.user}
                                       shareBaseUrl={
                                         (stats as StatsType)?.baseUrl ??
@@ -4561,6 +4906,15 @@ function MediaManagerContent() {
                                               })
                                           : undefined
                                       }
+                                      onBookmark={
+                                        session?.user
+                                          ? (v, isBm) =>
+                                              bookmarkMutation.mutate({
+                                                id: v.id,
+                                                isBookmarked: isBm,
+                                              })
+                                          : undefined
+                                      }
                                       showFavoriteButton={!!session?.user}
                                       shareBaseUrl={
                                         (stats as StatsType)?.baseUrl ??
@@ -4699,7 +5053,7 @@ function MediaManagerContent() {
                               ) : (
                                 <ChevronRight className="h-5 w-5 text-muted-foreground shrink-0" />
                               )}
-                              <Play className="h-4 w-4 text-muted-foreground shrink-0" />
+                              {/* <Play className="h-4 w-4 text-muted-foreground shrink-0" /> */}
                               <div className="flex-1 min-w-0">
                                 <h3 className="text-base font-semibold truncate">
                                   {pl.name}
@@ -4860,6 +5214,15 @@ function MediaManagerContent() {
                                                       })
                                                   : undefined
                                               }
+                                              onBookmark={
+                                                session?.user
+                                                  ? (v, isBm) =>
+                                                      bookmarkMutation.mutate({
+                                                        id: v.id,
+                                                        isBookmarked: isBm,
+                                                      })
+                                                  : undefined
+                                              }
                                               showFavoriteButton={
                                                 !!session?.user
                                               }
@@ -4959,7 +5322,7 @@ function MediaManagerContent() {
         <div className="space-y-6">
           <div className="sticky top-0 z-10 -mx-4 px-4 lg:-mx-6 lg:px-6 py-4 -mt-2 surface shadow-elevation-1 mb-6">
             <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-center justify-between">
-              <h2 className="text-2xl font-medium tracking-tight text-foreground">
+              <h2 className="hidden sm:block text-2xl font-medium tracking-tight text-foreground">
                 Подписки
               </h2>
               {/* Десктоп: все кнопки */}
@@ -4983,36 +5346,6 @@ function MediaManagerContent() {
                   <Plus className="mr-2 h-4 w-4" />
                   Добавить подписку
                 </Button>
-              </div>
-              {/* Мобайл: главная кнопка + dropdown */}
-              <div className="flex sm:hidden gap-2 w-full">
-                <Button
-                  className="flex-1 bg-primary hover:bg-primary/90 text-primary-foreground"
-                  onClick={() => setSubscriptionDialogOpen(true)}
-                >
-                  <Plus className="mr-2 h-4 w-4" />
-                  Добавить подписку
-                </Button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="icon">
-                      <MoreHorizontal className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem
-                      onClick={() => checkSubscriptionsMutation.mutate()}
-                      disabled={checkSubscriptionsMutation.isPending}
-                    >
-                      {checkSubscriptionsMutation.isPending ? (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      ) : (
-                        <RefreshCw className="mr-2 h-4 w-4" />
-                      )}
-                      Проверить обновления
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
               </div>
             </div>
           </div>
@@ -5629,7 +5962,7 @@ function MediaManagerContent() {
         <div className="space-y-6">
           <div className="sticky top-0 z-10 -mx-4 px-4 lg:-mx-6 lg:px-6 py-4 -mt-2 surface shadow-elevation-1 mb-6">
             <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-center justify-between">
-              <h2 className="text-2xl font-medium tracking-tight text-foreground">
+              <h2 className="hidden sm:block text-2xl font-medium tracking-tight text-foreground">
                 Очередь загрузок ({queueData?.active?.length ?? 0})
               </h2>
               {isAdmin && (
@@ -5966,11 +6299,12 @@ function MediaManagerContent() {
               </section>
             ) : null}
 
-          {/* Недавние задачи: разбиваем на «Загруженные» и «С ошибками» */}
+          {/* Недавние задачи: разбиваем на «Загруженные», «Отверженные» и «С ошибками» */}
           {(() => {
             const recent = (queueData?.recent ?? []) as DownloadTaskType[];
             if (!recent.length) return null;
             const completed = recent.filter((t) => t.status === "completed");
+            const rejected = recent.filter((t) => t.status === "rejected");
             const failed = recent.filter((t) => t.status === "failed");
             return (
               <>
@@ -6092,6 +6426,95 @@ function MediaManagerContent() {
                                     Готово
                                   </Badge>
                                 )}
+                                {task.completedAt && (
+                                  <span title="Дата и время смены состояния">
+                                    {formatDateTime(task.completedAt)}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex gap-1" />
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))}
+                    </div>
+                  </section>
+                  </section>
+                )}
+
+                {rejected.length > 0 && (
+                  <section className="rounded-xl border border-border/60 surface shadow-elevation-1 px-4 lg:px-6 overflow-hidden">
+                  <section className="mt-0">
+                    <div className="flex items-center justify-between gap-2 -mx-4 w-[calc(100%+2rem)] px-2 py-2 bg-[#F1F5F9] border-b border-border lg:-mx-6 lg:w-[calc(100%+3rem)] lg:px-4">
+                      <div className="flex items-center gap-2">
+                        <AlertTriangle className="h-4 w-4 text-slate-400 shrink-0" />
+                        <h3 className="text-xs font-medium text-slate-400 uppercase tracking-wider text-muted-foreground">
+                          Отверженные
+                        </h3>
+                      </div>
+                      <Badge
+                        variant="secondary"
+                        className="text-muted-foreground font-normal tabular-nums shrink-0"
+                      >
+                        {rejected.length}
+                      </Badge>
+                    </div>
+                    <div className="-mx-4 px-2 py-4 bg-muted/80 lg:-mx-6 lg:px-4 space-y-2">
+                      {rejected.map((task) => (
+                      <Card key={task.id}>
+                        <CardContent className="p-4">
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="flex-1 min-w-0">
+                              {task.url ? (
+                                <a
+                                  href={task.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="font-medium truncate hover:underline text-primary block"
+                                >
+                                  {task.title || task.video?.title || task.url}
+                                </a>
+                              ) : (
+                                <p className="font-medium truncate">
+                                  {task.title || task.video?.title || task.url}
+                                </p>
+                              )}
+                              {(() => {
+                                const channel =
+                                  task.video?.channel ??
+                                  task.subscription?.channel ??
+                                  null;
+                                return (channel?.name ||
+                                  task.video?.publishedAt) ? (
+                                  <p className="text-xs text-muted-foreground mt-1">
+                                    {channel?.id &&
+                                    subscriptions?.some(
+                                      (s: SubscriptionType) =>
+                                        s.channel.id === channel.id,
+                                    ) ? (
+                                      <Link
+                                        href={`/library?channelId=${channel.id}`}
+                                        className="hover:underline text-primary"
+                                      >
+                                        {channel.name}
+                                      </Link>
+                                    ) : (
+                                      channel?.name
+                                    )}
+                                    {channel?.name &&
+                                      task.video?.publishedAt &&
+                                      " · "}
+                                    {task.video?.publishedAt &&
+                                      `Опубликовано: ${formatDate(task.video.publishedAt)}`}
+                                  </p>
+                                ) : null;
+                              })()}
+                              <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground flex-wrap">
+                                <Badge variant="secondary">
+                                  <AlertTriangle className="mr-1 h-3 w-3" />{" "}
+                                  Отвергнуто
+                                </Badge>
                                 {task.completedAt && (
                                   <span title="Дата и время смены состояния">
                                     {formatDateTime(task.completedAt)}

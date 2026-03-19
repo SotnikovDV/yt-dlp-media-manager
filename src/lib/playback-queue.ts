@@ -9,6 +9,7 @@ export type PlaybackQueuePredefined =
   | { kind: 'recentDownloaded' }
   | { kind: 'recentWatched' }
   | { kind: 'favorites' }
+  | { kind: 'bookmarks' }
   | { kind: 'subscriptionCategory'; categoryId: string | null }
   | { kind: 'channel'; channelId: string }
   | { kind: 'library' } // пагинированный список медиатеки (поиск или все подписки)

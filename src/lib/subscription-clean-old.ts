@@ -50,12 +50,16 @@ export async function cleanOldVideosForSubscription(
     ? { pins: { none: {} } }
     : {};
 
+  // Если видео в списке «Закрепленные» хотя бы одного пользователя — не удалять
+  const bookmarkFilter = { bookmarks: { none: {} } };
+
   const videos = await db.video.findMany({
     where: {
       channelId: sub.channelId,
       publishedAt: { not: null, lt: cutoffDate },
       ...favoriteFilter,
       ...pinFilter,
+      ...bookmarkFilter,
     },
     select: { id: true, filePath: true, platformId: true },
   });

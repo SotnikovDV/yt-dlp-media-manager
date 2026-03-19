@@ -49,6 +49,7 @@ export async function GET(request: NextRequest) {
             channel: true,
             watchHistory: userId ? { where: { userId }, take: 1 } : false,
             favorites: userId ? { where: { userId }, take: 1 } : false,
+            bookmarks: userId ? { where: { userId }, take: 1 } : false,
             pins: userId ? { where: { userId }, take: 1 } : false,
           },
         });
@@ -93,6 +94,7 @@ export async function GET(request: NextRequest) {
                 channel: true,
                 watchHistory: userId ? { where: { userId }, take: 1 } : false,
                 favorites: userId ? { where: { userId }, take: 1 } : false,
+                bookmarks: userId ? { where: { userId }, take: 1 } : false,
                 pins: userId ? { where: { userId }, take: 1 } : false,
               },
             },
@@ -109,6 +111,46 @@ export async function GET(request: NextRequest) {
             limit,
             total: totalFav,
             totalPages: Math.ceil(totalFav / limit),
+          },
+        })
+      );
+    } else if (channelId === '__bookmarks__') {
+      if (!session?.user?.id) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      }
+      const bookmarkWhere = {
+        userId: session.user.id,
+        video: { filePath: { not: null } },
+      };
+      const [bookmarkRecords, totalBookmarks] = await Promise.all([
+        db.bookmark.findMany({
+          where: bookmarkWhere,
+          orderBy: { createdAt: 'desc' },
+          skip,
+          take: limit,
+          include: {
+            video: {
+              include: {
+                channel: true,
+                watchHistory: userId ? { where: { userId }, take: 1 } : false,
+                favorites: userId ? { where: { userId }, take: 1 } : false,
+                bookmarks: userId ? { where: { userId }, take: 1 } : false,
+                pins: userId ? { where: { userId }, take: 1 } : false,
+              },
+            },
+          },
+        }),
+        db.bookmark.count({ where: bookmarkWhere }),
+      ]);
+      const videos = bookmarkRecords.map((b) => b.video).filter(Boolean);
+      return NextResponse.json(
+        jsonSafe({
+          videos,
+          pagination: {
+            page,
+            limit,
+            total: totalBookmarks,
+            totalPages: Math.ceil(totalBookmarks / limit),
           },
         })
       );
@@ -132,6 +174,7 @@ export async function GET(request: NextRequest) {
                 channel: true,
                 watchHistory: { where: { userId: session.user.id }, take: 1 },
                 favorites: { where: { userId: session.user.id }, take: 1 },
+                bookmarks: { where: { userId: session.user.id }, take: 1 },
                 pins: { where: { userId: session.user.id }, take: 1 },
               },
             },
@@ -203,6 +246,7 @@ export async function GET(request: NextRequest) {
           channel: true,
           watchHistory: userId ? { where: { userId }, take: 1 } : false,
           favorites: userId ? { where: { userId }, take: 1 } : false,
+          bookmarks: userId ? { where: { userId }, take: 1 } : false,
           pins: userId ? { where: { userId }, take: 1 } : false,
         },
         orderBy,

@@ -15,7 +15,7 @@ import { cleanOldVideosForSubscription } from '@/lib/subscription-clean-old';
 import { getTagsForVideo } from '@/lib/read-info-chapters';
 import { syncVideoTagsFromNames } from '@/lib/sync-video-tags';
 
-const CLEANUP_TICK_INTERVAL = 20; // очистка старых completed раз в ~60 сек (tick каждые 3 сек)
+const CLEANUP_TICK_INTERVAL = 20; // очистка старых completed/rejected раз в ~60 сек (tick каждые 3 сек)
 const COMPLETED_KEEP_HOURS = 24;
 
 /** Минимальный интервал (мс) между обновлениями прогресса в БД — снижает нагрузку на SQLite */
@@ -49,7 +49,6 @@ async function withDbRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> 
 }
 
 declare global {
-  // eslint-disable-next-line no-var
   var __ydmmQueueWorker:
     | {
         started: boolean;
@@ -287,10 +286,10 @@ async function cleanupOldCompletedTasks() {
     const before = new Date();
     before.setHours(before.getHours() - COMPLETED_KEEP_HOURS);
     const r = await db.downloadTask.deleteMany({
-      where: { status: 'completed', completedAt: { lt: before } },
+      where: { status: { in: ['completed', 'rejected'] }, completedAt: { lt: before } },
     });
     if (r.count > 0) {
-      console.log('[queue-worker] Cleaned', r.count, 'old completed task(s)');
+      console.log('[queue-worker] Cleaned', r.count, 'old completed/rejected task(s)');
     }
   } catch (e) {
     console.warn('[queue-worker] Cleanup old completed failed:', e);
@@ -374,8 +373,8 @@ async function tick() {
         }
       }
 
-      // Отсечка по дате публикации: задача из подписки — не качаем видео старше окна downloadDays
-      if (task.subscriptionId && task.subscription) {
+      // Отсечка по дате публикации только для автоматически созданных задач подписок.
+      if (task.subscriptionId && task.subscription && task.isAutoSubscriptionTask) {
         const video = await db.video.findUnique({
           where: { id: videoId! },
           select: { publishedAt: true, title: true, platformId: true },
@@ -387,7 +386,7 @@ async function tick() {
             await db.downloadTask.update({
               where: { id: task.id },
               data: {
-                status: 'completed',
+                status: 'rejected',
                 progress: 100,
                 completedAt: new Date(),
                 errorMsg: null,

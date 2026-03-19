@@ -82,7 +82,7 @@ export async function sendTelegramAdminNotification(text: string, dedupKey?: str
   }
 
   const serverUrl = env.baseUrl();
-  const fullText = sanitizeText(text) + `\n\n🖥 <code>${serverUrl}</code>`;
+  const fullText = sanitizeText(text) + `\n\n🖥 <a href="${serverUrl}">${serverUrl}</a>`;
 
   try {
     const controller = new AbortController();

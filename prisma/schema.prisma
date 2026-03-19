@@ -55,6 +55,7 @@ model Video {
   videoTags      VideoTag[]
   downloadTasks  DownloadTask[]
   favorites      Favorite[]
+  bookmarks      Bookmark[]
   pins           VideoPin[]
   userIndividualVideos UserIndividualVideo[]
   playlistVideos PlaylistVideo[]
@@ -91,6 +92,19 @@ model PlaylistVideo {
 }
 
 model Favorite {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  videoId   String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, videoId])
+  @@index([userId])
+  @@index([videoId])
+}
+
+model Bookmark {
   id        String   @id @default(cuid())
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId    String
@@ -184,6 +198,7 @@ model DownloadTask {
   videoId         String?
   subscription    Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
   subscriptionId  String?
+  isAutoSubscriptionTask Boolean @default(false)
   title           String?
   status          String   @default("pending")
   progress        Int      @default(0)
@@ -258,6 +273,7 @@ model User {
   subscriptions        Subscription[]
   watchHistory        WatchHistory[]
   favorites           Favorite[]
+  bookmarks          Bookmark[]
   pins                VideoPin[]
   userIndividualVideos UserIndividualVideo[]
   playlists           Playlist[]

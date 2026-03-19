@@ -38,7 +38,6 @@ export function MiniAudioPlayer({
     if (!a) return;
     if (typeof initialTime === 'number' && initialTime > 0 && Number.isFinite(initialTime)) {
       a.currentTime = initialTime;
-      setCurrentTime(initialTime);
     }
     if (autoPlay) {
       a.play().catch(() => {});

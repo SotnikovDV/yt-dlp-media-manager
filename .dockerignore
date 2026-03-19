@@ -9,6 +9,7 @@ Backup
 node_modules
 .next
 .git
+.cursor/
 .gitignore
 *.log
 .env.local

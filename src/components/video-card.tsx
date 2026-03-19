@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
-import { Play, Video, CheckCircle, Star, Trash2, Download, ExternalLink, Share2, Eye, ListPlus, Plus, X, MoreVertical, Tag, MessageCircle, Link2 } from 'lucide-react';
+import { Play, Video, CheckCircle, Star, Trash2, Download, ExternalLink, Share2, Eye, ListPlus, Plus, X, MoreVertical, Tag, MessageCircle, Link2, Pin } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -151,6 +151,7 @@ export interface VideoCardVideo {
     | { position: number; completed: boolean; watchCount: number }[]
     | null;
   favorites?: { id: string }[];
+  bookmarks?: { id: string }[];
   pins?: { id: string }[];
   platformId?: string;
   description?: string | null;
@@ -163,6 +164,7 @@ export interface VideoCardProps<T extends VideoCardVideo = VideoCardVideo> {
   video: T;
   onPlay: (video: T) => void;
   onFavorite?: (video: T, isFavorite: boolean) => void;
+  onBookmark?: (video: T, isBookmarked: boolean) => void;
   onShowDescription?: (video: T) => void;
   /** Базовый URL приложения для меню «Поделиться» (В Telegram / Скопировать ссылку). Если задан, кнопка «Поделиться» открывает выбор варианта. */
   shareBaseUrl?: string;
@@ -181,6 +183,7 @@ export function VideoCard<T extends VideoCardVideo>({
   video,
   onPlay,
   onFavorite,
+  onBookmark,
   onShowDescription,
   shareBaseUrl,
   playlists,
@@ -194,16 +197,19 @@ export function VideoCard<T extends VideoCardVideo>({
 }: VideoCardProps<T>) {
   const watchRecord = Array.isArray(video.watchHistory) ? video.watchHistory[0] : video.watchHistory;
   const isFavorite = Array.isArray(video.favorites) && video.favorites.length > 0;
+  const isBookmarked = Array.isArray(video.bookmarks) && video.bookmarks.length > 0;
   const isPinned = Array.isArray(video.pins) && video.pins.length > 0;
   const [playlistMenuOpen, setPlaylistMenuOpen] = useState(false);
   const [contextMenuOpen, setContextMenuOpen] = useState(false);
   const [watchedOverride, setWatchedOverride] = useState<boolean | null>(null);
   const [pinnedOverride, setPinnedOverride] = useState<boolean | null>(null);
   const [favoriteOverride, setFavoriteOverride] = useState<boolean | null>(null);
+  const [bookmarkedOverride, setBookmarkedOverride] = useState<boolean | null>(null);
   const thumbnailSrc =
     (video.filePath || video.thumbnailUrl) ? `/api/thumbnail/${video.id}` : null;
 
   const isFavoriteEffective = favoriteOverride ?? isFavorite;
+  const isBookmarkedEffective = bookmarkedOverride ?? isBookmarked;
   const isViewed = watchedOverride ?? (watchRecord?.completed === true);
   const isKept = pinnedOverride ?? isPinned;
   const isNew =
@@ -480,6 +486,25 @@ export function VideoCard<T extends VideoCardVideo>({
                         )} />
                       </span>
                       Избранное
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      disabled={!onBookmark}
+                      className="pl-8 relative"
+                      onClick={() => {
+                        const next = !isBookmarkedEffective;
+                        setBookmarkedOverride(next);
+                        onBookmark?.(video, next);
+                      }}
+                    >
+                      <span className="pointer-events-none absolute left-2 flex size-3.5 items-center justify-center">
+                        <Pin className={cn(
+                          'h-3.5 w-3.5',
+                          isBookmarkedEffective
+                            ? 'fill-slate-500 text-slate-600'
+                            : 'text-muted-foreground'
+                        )} />
+                      </span>
+                      Закрепить
                     </DropdownMenuItem>
                     <DropdownMenuCheckboxItem
                       checked={isViewed}

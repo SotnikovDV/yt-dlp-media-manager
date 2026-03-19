@@ -371,6 +371,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [userMenuOpenHeader, setUserMenuOpenHeader] = useState(false);
   const [userMenuOpenSidebar, setUserMenuOpenSidebar] = useState(false);
 
+  // Позволяет дочерним страницам (например, через createPortal) закрывать
+  // мобильное меню при нажатии на глобальные действия.
+  useEffect(() => {
+    const handler = () => setMobileMenuOpen(false);
+    if (typeof window !== 'undefined') {
+      window.addEventListener('global-mobile-menu-close', handler as EventListener);
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener(
+          'global-mobile-menu-close',
+          handler as EventListener,
+        );
+      }
+    };
+  }, []);
+
   const { data: stats } = useQuery({
     queryKey: ['stats'],
     queryFn: async () => {
@@ -445,45 +462,57 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   };
 
   const isNavActive = (item: (typeof NAV_ITEMS)[number]) => pathname === item.href;
+  const activeNavLabel = NAV_ITEMS.find((item) => isNavActive(item))?.label;
 
   return (
     <div className="min-h-screen bg-background">
       {/* Мобильная шапка — Material top app bar */}
-      <header className="lg:hidden fixed top-0 left-0 right-0 h-14 surface elevation-2 z-50 flex items-center px-4">
+      <header className="lg:hidden fixed top-0 left-0 right-0 h-16 surface elevation-2 z-50 flex items-center px-4">
         <Button variant="ghost" size="icon" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
           {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
         </Button>
-        <h1 className="ml-2 text-xl font-medium tracking-tight">Media Manager</h1>
+        <div className="ml-2 flex flex-col leading-tight">
+          <h1 className="text-base font-medium tracking-tight">Media Manager</h1>
+          {activeNavLabel && (
+            <span className="text-xs text-muted-foreground">{activeNavLabel}</span>
+          )}
+        </div>
         <div className="ml-auto">
           {renderUserMenu({ compact: true, open: userMenuOpenHeader, onOpenChange: setUserMenuOpenHeader })}
         </div>
       </header>
 
       {/* Мобильное меню */}
-      {mobileMenuOpen && (
-        <div className="lg:hidden fixed inset-0 top-14 bg-background z-40 p-4">
-          <nav className="space-y-1">
-            {NAV_ITEMS.map((item) => (
-              <Link
-                key={item.id}
-                href={item.href}
-                onClick={() => setMobileMenuOpen(false)}
-                className={cn(
-                  'flex items-center gap-3 w-full rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors',
-                  isNavActive(item)
-                    ? 'bg-primary/10 text-primary'
-                    : 'text-foreground hover:bg-muted'
-                )}
-              >
-                {item.id === 'library' && <Video className="h-5 w-5 shrink-0" />}
-                {item.id === 'subscriptions' && <Rss className="h-5 w-5 shrink-0" />}
-                {item.id === 'queue' && <Download className="h-5 w-5 shrink-0" />}
-                {item.label}
-              </Link>
-            ))}
-          </nav>
-        </div>
-      )}
+      <div
+        className={cn(
+          'lg:hidden fixed inset-0 top-16 bg-background z-40 p-4 transition-opacity',
+          mobileMenuOpen ? 'block' : 'hidden',
+        )}
+      >
+        <nav className="space-y-1">
+          {NAV_ITEMS.map((item) => (
+            <Link
+              key={item.id}
+              href={item.href}
+              onClick={() => setMobileMenuOpen(false)}
+              className={cn(
+                'flex items-center gap-3 w-full rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors',
+                isNavActive(item)
+                  ? 'bg-primary/10 text-primary'
+                  : 'text-foreground hover:bg-muted'
+              )}
+            >
+              {item.id === 'library' && <Video className="h-5 w-5 shrink-0" />}
+              {item.id === 'subscriptions' && <Rss className="h-5 w-5 shrink-0" />}
+              {item.id === 'queue' && <Download className="h-5 w-5 shrink-0" />}
+              {item.label}
+            </Link>
+          ))}
+        </nav>
+
+        {/* Сюда страница подставляет глобальные действия на мобилке */}
+        <div id="mobile-actions-slot" className="mt-4 pt-4 border-t border-border/80" />
+      </div>
 
       {/* Десктопный сайдбар — Material navigation drawer */}
       <aside
@@ -609,12 +638,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       <main
         className={cn(
-          'transition-all duration-300 pt-14 lg:pt-0 min-h-screen',
+          'transition-all duration-300 pt-16 lg:pt-0 min-h-screen',
           sidebarOpen ? 'lg:ml-64' : 'lg:ml-16',
           isMiniPlayerVisible && 'pb-28'
         )}
       >
-        <div className="p-2 lg:px-4 lg:pb-4 lg:pt-0">{children}</div>
+        <div className="py-2 px-3 lg:px-4 lg:pb-4 lg:pt-0">{children}</div>
       </main>
       <GlobalMiniPlayer />
     </div>

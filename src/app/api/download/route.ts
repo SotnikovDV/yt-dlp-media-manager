@@ -123,6 +123,11 @@ export async function POST(request: NextRequest) {
       },
     });
 
+    const userSubscription = await db.subscription.findFirst({
+      where: { userId: session.user.id, channelId: channel.id },
+      select: { id: true },
+    });
+
     const avatarUrl = videoInfo.thumbnails?.[0]?.url;
     if (avatarUrl) {
       void downloadAndSaveChannelAvatar(
@@ -145,18 +150,22 @@ export async function POST(request: NextRequest) {
     });
 
     if (existingVideo && existingVideo.filePath) {
-      // Видео уже скачано — добавляем в «отдельные» для текущего пользователя и возвращаем успех
-      await db.userIndividualVideo.upsert({
-        where: {
-          userId_videoId: { userId: session.user.id, videoId: existingVideo.id },
-        },
-        create: { userId: session.user.id, videoId: existingVideo.id },
-        update: {},
-      });
+      // Видео уже скачано: добавляем в «отдельные» только если нет подписки пользователя на канал.
+      if (!userSubscription) {
+        await db.userIndividualVideo.upsert({
+          where: {
+            userId_videoId: { userId: session.user.id, videoId: existingVideo.id },
+          },
+          create: { userId: session.user.id, videoId: existingVideo.id },
+          update: {},
+        });
+      }
       return NextResponse.json({
         success: true,
         alreadyDownloaded: true,
-        message: 'Видео уже в медиатеке, добавлено в ваши отдельные видео',
+        message: userSubscription
+          ? 'Видео уже в медиатеке'
+          : 'Видео уже в медиатеке, добавлено в ваши отдельные видео',
         video: existingVideo,
       });
     }
@@ -226,17 +235,21 @@ export async function POST(request: NextRequest) {
         status: 'pending',
         startedAt: null,
         videoId: video.id,
+        subscriptionId: userSubscription?.id,
+        isAutoSubscriptionTask: false,
       }
     });
 
-    // Привязываем видео к пользователю как «отдельное» (после завершения загрузки появится в разделе «Отдельные видео»)
-    await db.userIndividualVideo.upsert({
-      where: {
-        userId_videoId: { userId: session.user.id, videoId: video.id },
-      },
-      create: { userId: session.user.id, videoId: video.id },
-      update: {},
-    });
+    // Привязываем в «отдельные» только при отсутствии подписки пользователя на канал.
+    if (!userSubscription) {
+      await db.userIndividualVideo.upsert({
+        where: {
+          userId_videoId: { userId: session.user.id, videoId: video.id },
+        },
+        create: { userId: session.user.id, videoId: video.id },
+        update: {},
+      });
+    }
 
     // Запускаем воркер, который выполнит скачивание с учётом лимита параллелизма
     ensureQueueWorker();
