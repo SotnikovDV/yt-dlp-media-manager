@@ -2,11 +2,10 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
-import { Play, Video, CheckCircle, Star, Trash2, Download, ExternalLink, Share2, Eye, ListPlus, Plus, X, MoreVertical, Tag, MessageCircle, Link2, Pin } from 'lucide-react';
+import { Play, Video, Star, Trash2, Download, ExternalLink, Share2, Eye, ListPlus, Plus, X, MoreVertical, Tag, MessageCircle, Link2, Pin, Music2, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { ShareVideoMenu } from '@/components/share-video-menu';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,6 +18,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
+import { withAudioDownloadSlot } from '@/lib/client-audio-download-queue';
+import { fetchAndSavePreparedAudio } from '@/lib/prepared-audio-download';
 
 function buildWatchUrl(baseUrl: string, videoId: string): string {
   return `${baseUrl.replace(/\/$/, '')}/watch/${videoId}`;
@@ -166,9 +167,9 @@ export interface VideoCardProps<T extends VideoCardVideo = VideoCardVideo> {
   onFavorite?: (video: T, isFavorite: boolean) => void;
   onBookmark?: (video: T, isBookmarked: boolean) => void;
   onShowDescription?: (video: T) => void;
-  /** Базовый URL приложения для меню «Поделиться» (В Telegram / Скопировать ссылку). Если задан, кнопка «Поделиться» открывает выбор варианта. */
+  /** Базовый URL приложения для подменю «Поделиться» в меню действий (В Telegram / Скопировать ссылку). */
   shareBaseUrl?: string;
-  /** Плейлисты и колбэки для кнопки «Добавить в плейлист». Если заданы, кнопка показывается вверху карточки справа от «Поделиться». */
+  /** Плейлисты и колбэки для кнопки «Добавить в плейлист» в углу превью. */
   playlists?: PlaylistForCard[];
   onAddToPlaylist?: (playlistId: string, videoId: string) => void;
   onRemoveFromPlaylist?: (playlistId: string, videoId: string) => void;
@@ -205,6 +206,7 @@ export function VideoCard<T extends VideoCardVideo>({
   const [pinnedOverride, setPinnedOverride] = useState<boolean | null>(null);
   const [favoriteOverride, setFavoriteOverride] = useState<boolean | null>(null);
   const [bookmarkedOverride, setBookmarkedOverride] = useState<boolean | null>(null);
+  const [audioDownloadBusy, setAudioDownloadBusy] = useState(false);
   const thumbnailSrc =
     (video.filePath || video.thumbnailUrl) ? `/api/thumbnail/${video.id}` : null;
 
@@ -232,33 +234,29 @@ export function VideoCard<T extends VideoCardVideo>({
       <div className="relative flex-[0_0_50%] min-h-0 flex items-center justify-center bg-muted overflow-hidden">
         {/* Кнопки в правом верхнем углу — прозрачный фон, матовое стекло только при наведении */}
         <div className="absolute top-2 right-2 z-10 flex items-center gap-1.5">
-          {video.platformId && (
-            <a
-              href={`https://www.youtube.com/watch?v=${video.platformId}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              title="Открыть источник"
-              onClick={(e) => e.stopPropagation()}
+          {onBookmark && (
+            <button
+              type="button"
+              title={
+                isBookmarkedEffective ? 'Убрать из закреплённых' : 'Закрепить'
+              }
+              onClick={(e) => {
+                e.stopPropagation();
+                const next = !isBookmarkedEffective;
+                setBookmarkedOverride(next);
+                onBookmark(video, next);
+              }}
               className="flex items-center justify-center w-8 h-8 rounded-md text-white transition-all duration-200 hover:bg-white/25 hover:backdrop-blur-md"
             >
-              <ExternalLink className="h-3.5 w-3.5" />
-            </a>
-          )}
-          {shareBaseUrl && (
-            <ShareVideoMenu
-              videoId={video.id}
-              title={video.title}
-              baseUrl={shareBaseUrl}
-            >
-              <button
-                type="button"
-                title="Поделиться"
-                onClick={(e) => e.stopPropagation()}
-                className="flex items-center justify-center w-8 h-8 rounded-md text-white transition-all duration-200 hover:bg-white/25 hover:backdrop-blur-md"
-              >
-                <Share2 className="h-3.5 w-3.5" />
-              </button>
-            </ShareVideoMenu>
+              <Pin
+                className={cn(
+                  'h-3.5 w-3.5',
+                  isBookmarkedEffective
+                    ? 'fill-white text-white'
+                    : 'text-white/90',
+                )}
+              />
+            </button>
           )}
           {playlists != null && onAddToPlaylist && onCreatePlaylistAndAdd && (
             <DropdownMenu open={playlistMenuOpen} onOpenChange={setPlaylistMenuOpen}>
@@ -327,11 +325,6 @@ export function VideoCard<T extends VideoCardVideo>({
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-          )}
-          {watchRecord?.completed && (
-            <span className="flex items-center justify-center w-8 h-8">
-              <CheckCircle className="h-5 w-5 text-green-500" />
-            </span>
           )}
         </div>
         {thumbnailSrc ? (
@@ -574,6 +567,25 @@ export function VideoCard<T extends VideoCardVideo>({
                           <Video className="h-4 w-4 mr-2 shrink-0" />
                           Видео
                         </a>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        disabled={audioDownloadBusy}
+                        title="AAC (.m4a). Ход подготовки — пульсация «Media Manager» в шапке. Битрейт и моно — в Настройках (админ) или AUDIO_EXTRACT_AAC_* в .env.local."
+                        onClick={() => {
+                          if (audioDownloadBusy) return;
+                          setContextMenuOpen(false);
+                          setAudioDownloadBusy(true);
+                          withAudioDownloadSlot(() => fetchAndSavePreparedAudio(video))
+                            .catch(() => {})
+                            .finally(() => setAudioDownloadBusy(false));
+                        }}
+                      >
+                        {audioDownloadBusy ? (
+                          <Loader2 className="h-4 w-4 mr-2 shrink-0 animate-spin" />
+                        ) : (
+                          <Music2 className="h-4 w-4 mr-2 shrink-0" />
+                        )}
+                        Аудио
                       </DropdownMenuItem>
                     </DropdownMenuSubContent>
                   </DropdownMenuSub>

@@ -7,6 +7,9 @@ import {
   Pause,
   Volume2,
   VolumeX,
+  Star,
+  Pin,
+  Shield,
   Maximize,
   Minimize,
   Gauge,
@@ -15,7 +18,12 @@ import {
   SkipForward,
   PictureInPicture2,
   Info,
+  Share2,
+  Download,
   X,
+  ExternalLink,
+  Video as VideoIcon,
+  Music2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
@@ -27,7 +35,10 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
+import { ShareVideoMenu } from '@/components/share-video-menu';
 import { useGlobalPlayerActions } from '@/lib/player-store';
+import { withAudioDownloadSlot } from '@/lib/client-audio-download-queue';
+import { fetchAndSavePreparedAudio } from '@/lib/prepared-audio-download';
 
 const VOLUME_STORAGE_KEY = 'video-player-volume';
 const AUTO_NEXT_STORAGE_KEY = 'video-player-auto-next';
@@ -126,11 +137,228 @@ interface VideoInfoPanelProps {
   title: string;
   description: string;
   youtubeUrl?: string | null;
+  descriptionActions?: VideoPlayerDescriptionActions;
+  portalContainer?: HTMLElement | null;
   onClose: () => void;
   onSeekToTime: (seconds: number) => void;
 }
 
-function VideoInfoPanel({ open, title, description, youtubeUrl, onClose, onSeekToTime }: VideoInfoPanelProps) {
+export interface VideoPlayerDescriptionToggleAction {
+  active: boolean;
+  onToggle: () => void;
+  disabled?: boolean;
+}
+
+export interface VideoPlayerDescriptionActions {
+  favorite?: VideoPlayerDescriptionToggleAction;
+  bookmark?: VideoPlayerDescriptionToggleAction;
+  keep?: VideoPlayerDescriptionToggleAction;
+  share?: { videoId: string; title: string; baseUrl: string };
+  download?: { videoId: string; title: string; platformId?: string };
+}
+
+function VideoInfoActionsToolbar({
+  actions,
+  youtubeUrl,
+  portalContainer,
+}: {
+  actions?: VideoPlayerDescriptionActions;
+  youtubeUrl?: string | null;
+  portalContainer?: HTMLElement | null;
+}) {
+  const [audioBusy, setAudioBusy] = useState(false);
+
+  if (
+    !actions &&
+    !youtubeUrl
+  ) {
+    return null;
+  }
+
+  const favorite = actions?.favorite;
+  const bookmark = actions?.bookmark;
+  const keep = actions?.keep;
+  const share = actions?.share;
+  const download = actions?.download;
+
+  const btnBase =
+    'h-9 w-9 shrink-0 inline-flex items-center justify-center rounded-xl border transition-colors ' +
+    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/20 focus-visible:ring-offset-2 ' +
+    'focus-visible:ring-offset-black pointer-events-auto';
+  const btnRest =
+    'bg-white/5 border-white/10 text-white/80 hover:bg-white/10';
+  const btnActive = 'bg-primary/20 border-primary/30 text-primary/90';
+
+  return (
+    <div className="mx-4 mt-2 flex items-center gap-2 overflow-x-auto whitespace-nowrap">
+      {favorite && (
+        <button
+          type="button"
+          disabled={favorite.disabled}
+          title={favorite.active ? 'Убрать из избранного' : 'В избранное'}
+          aria-pressed={favorite.active}
+          onClick={(e) => {
+            e.stopPropagation();
+            favorite.onToggle();
+          }}
+          className={cn(btnBase, btnRest, favorite.active && btnActive)}
+        >
+          <Star
+            className={cn(
+              'h-5 w-5 shrink-0',
+              favorite.active
+                ? 'fill-amber-500 text-amber-400'
+                : 'text-white/80',
+            )}
+          />
+        </button>
+      )}
+
+      {bookmark && (
+        <button
+          type="button"
+          disabled={bookmark.disabled}
+          title={bookmark.active ? 'Убрать из закреплённых' : 'Закрепить'}
+          aria-pressed={bookmark.active}
+          onClick={(e) => {
+            e.stopPropagation();
+            bookmark.onToggle();
+          }}
+          className={cn(btnBase, btnRest, bookmark.active && btnActive)}
+        >
+          <Pin
+            className={cn(
+              'h-5 w-5 shrink-0',
+              bookmark.active ? 'fill-primary/20 text-primary/90' : 'text-white/80',
+            )}
+          />
+        </button>
+      )}
+
+      {keep && (
+        <button
+          type="button"
+          disabled={keep.disabled}
+          title={
+            keep.active ? 'Снять защиту от очистки' : 'Не удалять при очистке медиатеки'
+          }
+          aria-pressed={keep.active}
+          onClick={(e) => {
+            e.stopPropagation();
+            keep.onToggle();
+          }}
+          className={cn(btnBase, btnRest, keep.active && btnActive)}
+        >
+          <Shield
+            className={cn(
+              'h-5 w-5 shrink-0',
+              keep.active ? 'text-primary/90' : 'text-white/80',
+            )}
+          />
+        </button>
+      )}
+
+      {share && share.baseUrl?.trim() && (
+        <ShareVideoMenu
+          videoId={share.videoId}
+          title={share.title}
+          baseUrl={share.baseUrl}
+          container={portalContainer ?? undefined}
+        >
+          <button
+            type="button"
+            title="Поделиться"
+            className={cn(btnBase, btnRest)}
+          >
+            <Share2 className="h-5 w-5 shrink-0" />
+          </button>
+        </ShareVideoMenu>
+      )}
+
+      {download && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              title="Скачать"
+              className={cn(btnBase, btnRest)}
+            >
+              {audioBusy ? (
+                <Loader2 className="h-5 w-5 shrink-0 animate-spin text-white/90" />
+              ) : (
+                <Download className="h-5 w-5 shrink-0" />
+              )}
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="start"
+            container={portalContainer ?? undefined}
+            onCloseAutoFocus={(e) => e.preventDefault()}
+          >
+            <DropdownMenuItem asChild>
+              <a
+                href={`/api/stream/${download.videoId}?download=1`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <VideoIcon className="h-4 w-4 mr-2 shrink-0" />
+                Видео
+              </a>
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={audioBusy}
+              title="AAC (.m4a). Ход подготовки — пульсация «Media Manager» в шапке."
+              onClick={() => {
+                if (audioBusy) return;
+                setAudioBusy(true);
+                withAudioDownloadSlot(() =>
+                  fetchAndSavePreparedAudio({
+                    id: download.videoId,
+                    title: download.title,
+                    platformId: download.platformId,
+                  }),
+                )
+                  .catch(() => {})
+                  .finally(() => setAudioBusy(false));
+              }}
+            >
+              {audioBusy ? (
+                <Loader2 className="h-4 w-4 mr-2 shrink-0 animate-spin" />
+              ) : (
+                <Music2 className="h-4 w-4 mr-2 shrink-0" />
+              )}
+              Аудио
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+
+      {youtubeUrl && (
+        <a
+          href={youtubeUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Открыть на YouTube"
+          className={cn(btnBase, btnRest, 'no-underline text-white/80')}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <ExternalLink className="h-5 w-5 shrink-0" />
+        </a>
+      )}
+    </div>
+  );
+}
+
+function VideoInfoPanel({
+  open,
+  title,
+  description,
+  youtubeUrl,
+  descriptionActions,
+  portalContainer,
+  onClose,
+  onSeekToTime,
+}: VideoInfoPanelProps) {
   return (
     <div
       data-role="video-controls"
@@ -138,9 +366,6 @@ function VideoInfoPanel({ open, title, description, youtubeUrl, onClose, onSeekT
         'absolute right-0 top-0 bottom-0 z-40 w-80 bg-black/88 backdrop-blur-sm flex flex-col transition-transform duration-300 ease-in-out',
         open ? 'translate-x-0' : 'translate-x-full'
       )}
-      onClick={(e) => e.stopPropagation()}
-      onDoubleClick={(e) => e.stopPropagation()}
-      onMouseMove={(e) => e.stopPropagation()}
     >
       <div className="flex items-start justify-between gap-2 px-4 pt-4 pb-3 border-b border-white/10 shrink-0">
         <h3 className="text-white font-semibold text-sm leading-snug">{title}</h3>
@@ -153,18 +378,11 @@ function VideoInfoPanel({ open, title, description, youtubeUrl, onClose, onSeekT
           <X className="w-4 h-4" />
         </button>
       </div>
-      {youtubeUrl && (
-        <div className="px-4 py-2 border-b border-white/10 shrink-0">
-          <a
-            href={youtubeUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs text-blue-400 hover:underline"
-          >
-            Открыть на YouTube
-          </a>
-        </div>
-      )}
+      <VideoInfoActionsToolbar
+        actions={descriptionActions}
+        youtubeUrl={youtubeUrl}
+        portalContainer={portalContainer}
+      />
       <div className="flex-1 overflow-y-auto px-4 py-3 text-sm text-white/80 whitespace-pre-wrap min-h-0">
         {renderDescriptionInPlayer(description, onSeekToTime)}
       </div>
@@ -233,6 +451,8 @@ export interface VideoPlayerProps {
   description?: string;
   /** Ссылка на YouTube для отображения в панели описания */
   youtubeUrl?: string | null;
+  /** Действия (избранное/закрепить/не очищать/поделиться/скачать) в панели (i) */
+  descriptionActions?: VideoPlayerDescriptionActions;
 }
 
 export function VideoPlayer({
@@ -258,6 +478,7 @@ export function VideoPlayer({
   onTimeUpdate,
   description,
   youtubeUrl,
+  descriptionActions,
 }: VideoPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -987,6 +1208,8 @@ export function VideoPlayer({
           title={title}
           description={description}
           youtubeUrl={youtubeUrl}
+          descriptionActions={descriptionActions}
+          portalContainer={containerRef.current}
           onClose={() => setInfoOpen(false)}
           onSeekToTime={seekToAbsolute}
         />
@@ -1203,10 +1426,8 @@ export function VideoPlayer({
                 document.exitFullscreen().catch(() => {});
               }
               const videoSrc = src;
-              const audioSrc =
-                typeof src === 'string'
-                  ? src.replace(/\.[^./]+$/, '.webp')
-                  : undefined;
+              // Та же выдача /api/stream — контейнер с аудио; .webp у нас превью, не звук.
+              const audioSrc = typeof src === 'string' ? src : undefined;
               setTrack({
                 id: src,
                 src: videoSrc,

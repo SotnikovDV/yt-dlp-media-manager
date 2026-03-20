@@ -371,6 +371,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [userMenuOpenHeader, setUserMenuOpenHeader] = useState(false);
   const [userMenuOpenSidebar, setUserMenuOpenSidebar] = useState(false);
 
+  /** Активные «скачать аудио» (очередь + конвертация + blob). */
+  const [audioBackgroundCount, setAudioBackgroundCount] = useState(0);
+  /** Параллельные проверки подписок (массовая / одна / по категории). */
+  const [subscriptionBackgroundCount, setSubscriptionBackgroundCount] = useState(0);
+
   // Позволяет дочерним страницам (например, через createPortal) закрывать
   // мобильное меню при нажатии на глобальные действия.
   useEffect(() => {
@@ -385,6 +390,28 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           handler as EventListener,
         );
       }
+    };
+  }, []);
+
+  // Счётчики фоновых задач (аудио + проверки подписок) — бейдж и пульсация заголовка.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const onAudio = (e: Event) => {
+      const c = (e as CustomEvent<{ count: number }>).detail?.count;
+      setAudioBackgroundCount(typeof c === 'number' && c >= 0 ? c : 0);
+    };
+    const onSub = (e: Event) => {
+      const c = (e as CustomEvent<{ count: number }>).detail?.count;
+      setSubscriptionBackgroundCount(typeof c === 'number' && c >= 0 ? c : 0);
+    };
+
+    window.addEventListener('global-audio-download-count', onAudio as EventListener);
+    window.addEventListener('global-subscription-check-count', onSub as EventListener);
+
+    return () => {
+      window.removeEventListener('global-audio-download-count', onAudio as EventListener);
+      window.removeEventListener('global-subscription-check-count', onSub as EventListener);
     };
   }, []);
 
@@ -408,6 +435,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const renderUserMenu = (opts: { compact?: boolean; open?: boolean; onOpenChange?: (open: boolean) => void }) => {
     const { compact, open, onOpenChange } = opts;
+    /** Мобильная шапка (lg:hidden) — иначе десктопный сайдбар */
+    const isMobileHeader = !!compact;
     if (!userId) return null;
     return (
       <DropdownMenu open={open} onOpenChange={(v) => onOpenChange?.(v)}>
@@ -415,7 +444,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <Button
             variant="ghost"
             size="icon"
-            className={cn('rounded-full cursor-pointer', compact ? '' : 'ml-auto')}
+            className={cn(
+              'rounded-full cursor-pointer',
+              isMobileHeader
+                ? 'text-foreground hover:bg-muted hover:text-foreground'
+                : 'ml-auto bg-white/5 text-white/70 hover:bg-white/10 hover:text-white',
+            )}
             title={userDisplay}
           >
             <Avatar className="h-8 w-8">
@@ -426,10 +460,31 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </Avatar>
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-56">
-          <DropdownMenuLabel className="truncate">{userDisplay}</DropdownMenuLabel>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem asChild>
+        <DropdownMenuContent
+          align="end"
+          className={cn(
+            'w-56 rounded-lg border p-1 shadow-md',
+            isMobileHeader
+              ? 'border-border bg-popover text-popover-foreground'
+              : 'border-border/80 bg-secondary text-secondary-foreground',
+          )}
+        >
+          <DropdownMenuLabel
+            className={cn(
+              'truncate font-semibold',
+              isMobileHeader ? 'text-popover-foreground' : 'text-secondary-foreground',
+            )}
+          >
+            {userDisplay}
+          </DropdownMenuLabel>
+          <DropdownMenuSeparator className="-mx-1 my-1 h-px bg-border" />
+          <DropdownMenuItem
+            asChild
+            className={cn(
+              'hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground [&_svg]:text-muted-foreground',
+              isMobileHeader ? 'text-popover-foreground' : 'text-secondary-foreground',
+            )}
+          >
             <Link href="/profile">
               <User className="mr-2 h-4 w-4" />
               Профиль
@@ -437,13 +492,25 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </DropdownMenuItem>
           {isAdmin && (
             <>
-              <DropdownMenuItem asChild>
+              <DropdownMenuItem
+                asChild
+                className={cn(
+                  'hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground [&_svg]:text-muted-foreground',
+                  isMobileHeader ? 'text-popover-foreground' : 'text-secondary-foreground',
+                )}
+              >
                 <Link href="/settings">
                   <Settings className="mr-2 h-4 w-4" />
                   Настройки
                 </Link>
               </DropdownMenuItem>
-              <DropdownMenuItem asChild>
+              <DropdownMenuItem
+                asChild
+                className={cn(
+                  'hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground [&_svg]:text-muted-foreground',
+                  isMobileHeader ? 'text-popover-foreground' : 'text-secondary-foreground',
+                )}
+              >
                 <Link href="/admin">
                   <Shield className="mr-2 h-4 w-4" />
                   Админка
@@ -451,8 +518,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </DropdownMenuItem>
             </>
           )}
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={() => signOut({ callbackUrl: '/login' })}>
+          <DropdownMenuSeparator className="-mx-1 my-1 h-px bg-border" />
+          <DropdownMenuItem
+            className="text-destructive hover:bg-destructive/10 hover:text-destructive focus:bg-destructive/10 focus:text-destructive data-[state=open]:bg-destructive/10 [&_svg]:text-destructive"
+            onClick={() => signOut({ callbackUrl: '/login' })}
+          >
             <LogOut className="mr-2 h-4 w-4" />
             Выйти
           </DropdownMenuItem>
@@ -463,6 +533,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const isNavActive = (item: (typeof NAV_ITEMS)[number]) => pathname === item.href;
   const activeNavLabel = NAV_ITEMS.find((item) => isNavActive(item))?.label;
+  const backgroundTaskTotal = audioBackgroundCount + subscriptionBackgroundCount;
+  const isGlobalHeaderBusy = backgroundTaskTotal > 0;
 
   return (
     <div className="min-h-screen bg-background">
@@ -471,8 +543,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <Button variant="ghost" size="icon" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
           {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
         </Button>
-        <div className="ml-2 flex flex-col leading-tight">
-          <h1 className="text-base font-medium tracking-tight">Media Manager</h1>
+        <div className="ml-2 flex min-w-0 flex-1 flex-col leading-tight">
+          <h1
+            className={cn(
+              'flex flex-wrap items-center gap-x-1.5 gap-y-0 text-base font-medium tracking-tight',
+              isGlobalHeaderBusy && 'text-primary animate-pulse',
+            )}
+          >
+            <span className="shrink-0">Media Manager</span>
+            {backgroundTaskTotal > 0 && (
+              <span
+                className="inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-md bg-primary/20 px-1 text-[10px] font-semibold tabular-nums text-primary animate-none"
+                title={`Фоновые задачи: ${backgroundTaskTotal} (аудио: ${audioBackgroundCount}, проверки подписок: ${subscriptionBackgroundCount})`}
+              >
+                {backgroundTaskTotal}
+              </span>
+            )}
+          </h1>
           {activeNavLabel && (
             <span className="text-xs text-muted-foreground">{activeNavLabel}</span>
           )}
@@ -517,45 +604,126 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {/* Десктопный сайдбар — Material navigation drawer */}
       <aside
         className={cn(
-          'hidden lg:flex flex-col fixed left-0 top-0 h-full surface border-r border-border/80 shadow-elevation-1 z-50 transition-all duration-300',
+          'hidden lg:flex flex-col fixed left-0 top-0 h-full bg-[#111827] text-white/55 border-r border-white/10 shadow-elevation-1 z-50 transition-all duration-300',
           sidebarOpen ? 'w-64' : 'w-16'
         )}
       >
-        <div className="p-4 border-b border-border/80 flex items-center justify-between min-h-[56px]">
+        <div className="px-2 py-4 border-b border-white/10 flex items-center justify-between min-h-[56px]">
           {sidebarOpen && (
-            <Link href="/library" className="text-xl font-medium tracking-tight text-foreground hover:text-primary transition-colors">
-              Media Manager
-            </Link>
+            <div className="flex min-w-0 items-center gap-2">
+              <div className="h-7 w-7 rounded-[7px] bg-[#2563eb] flex items-center justify-center text-white shadow-sm shrink-0">
+                <Video className="h-5 w-5" />
+              </div>
+              <Link
+                href="/library"
+                className={cn(
+                  'min-w-0 flex flex-wrap items-center gap-x-2 gap-y-0 text-left text-xl font-medium tracking-tight transition-colors',
+                  isGlobalHeaderBusy ? 'text-sky-200 animate-pulse' : 'text-white',
+                )}
+                title={
+                  backgroundTaskTotal > 0
+                    ? `Фоновые задачи: ${backgroundTaskTotal} (аудио: ${audioBackgroundCount}, проверки: ${subscriptionBackgroundCount})`
+                    : undefined
+                }
+              >
+                <span className="truncate">Media Manager</span>
+                {backgroundTaskTotal > 0 && (
+                  <span
+                    className="inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-md bg-[#2563eb]/40 px-1.5 text-[11px] font-semibold tabular-nums text-[#93c5fd] animate-none"
+                    title={`Фоновые задачи: ${backgroundTaskTotal} (аудио: ${audioBackgroundCount}, проверки: ${subscriptionBackgroundCount})`}
+                  >
+                    {backgroundTaskTotal}
+                  </span>
+                )}
+              </Link>
+            </div>
           )}
           <Button variant="ghost" size="icon" onClick={() => setSidebarOpen(!sidebarOpen)}>
             <FolderOpen className="h-4 w-4" />
           </Button>
         </div>
 
-        <nav className="flex-1 p-2 space-y-0.5">
+        <nav className="flex-1 p-2 space-y-1">
           {NAV_ITEMS.map((item) => (
-            <Link
-              key={item.id}
-              href={item.href}
-              className={cn(
-                'flex items-center rounded-lg py-2.5 text-sm font-medium transition-colors',
-                sidebarOpen ? 'px-3 gap-3' : 'px-0 justify-center',
-                isNavActive(item)
-                  ? 'bg-primary/10 text-primary'
-                  : 'text-foreground hover:bg-muted'
-              )}
-            >
-              {item.id === 'library' && <Video className={cn('h-5 w-5 shrink-0', sidebarOpen && 'ml-0')} />}
-              {item.id === 'subscriptions' && <Rss className={cn('h-5 w-5 shrink-0', sidebarOpen && 'ml-0')} />}
-              {item.id === 'queue' && <Download className={cn('h-5 w-5 shrink-0', sidebarOpen && 'ml-0')} />}
-              {sidebarOpen && <span>{item.label}</span>}
-            </Link>
+            (() => {
+              const navBadgeCount =
+                item.id === "subscriptions"
+                  ? stats?.channels?.subscriptions ?? 0
+                  : item.id === "queue"
+                    ? stats?.queue?.active ?? 0
+                    : 0;
+
+              const showBadge = sidebarOpen && navBadgeCount > 0;
+              const active = isNavActive(item);
+
+              return (
+                <Link
+                  key={item.id}
+                  href={item.href}
+                  className={cn(
+                    'group relative flex items-center rounded-lg py-2.5 text-sm font-medium transition-colors w-full',
+                    sidebarOpen ? 'px-3 gap-3' : 'px-0 justify-center',
+                    active
+                      ? 'bg-[#2563eb]/20 text-white'
+                      : sidebarOpen
+                        ? 'text-white/55 hover:bg-white/7 hover:text-white'
+                        : 'text-white/55 hover:bg-white/7'
+                  )}
+                >
+                  {item.id === 'library' && (
+                    <Video
+                      className={cn(
+                        'h-5 w-5 shrink-0',
+                        active ? 'text-[#60a5fa]' : 'text-white/55 group-hover:text-white',
+                        sidebarOpen && 'ml-0'
+                      )}
+                    />
+                  )}
+                  {item.id === 'subscriptions' && (
+                    <Rss
+                      className={cn(
+                        'h-5 w-5 shrink-0',
+                        active ? 'text-[#60a5fa]' : 'text-white/55 group-hover:text-white',
+                        sidebarOpen && 'ml-0'
+                      )}
+                    />
+                  )}
+                  {item.id === 'queue' && (
+                    <Download
+                      className={cn(
+                        'h-5 w-5 shrink-0',
+                        active ? 'text-[#60a5fa]' : 'text-white/55 group-hover:text-white',
+                        sidebarOpen && 'ml-0'
+                      )}
+                    />
+                  )}
+
+                  {sidebarOpen && <span className="truncate text-base font-normal">{item.label}</span>}
+
+                  {showBadge && (
+                    <span
+                      className={cn(
+                        'ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded-full text-[11px] font-semibold',
+                        active ? 'bg-[#2563eb]/40 text-[#93c5fd]' : 'bg-white/12 text-white/60'
+                      )}
+                      title={
+                        item.id === 'queue'
+                          ? `Активных задач: ${navBadgeCount}`
+                          : `Подписок: ${navBadgeCount}`
+                      }
+                    >
+                      {navBadgeCount}
+                    </span>
+                  )}
+                </Link>
+              );
+            })()
           ))}
         </nav>
 
         {sidebarOpen && tagsData?.tags && tagsData.tags.length > 0 && (
-          <div className="px-3 py-2 border-t border-border/80">
-            <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1.5">
+          <div className="px-3 py-2 border-t border-white/10">
+            <p className="text-[10px] font-semibold tracking-widest text-white/25 uppercase mb-2 flex items-center gap-1.5">
               <Tag className="h-3.5 w-5" />
               Теги
             </p>
@@ -569,7 +737,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     href={`/library?tagId=${encodeURIComponent(tag.id)}`}
                     className={cn(
                       'inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium transition-colors',
-                      'bg-muted/80 text-muted-foreground hover:bg-primary/15 hover:text-primary'
+                      'bg-white/7 text-white/45 hover:bg-white/12 hover:text-white/80'
                     )}
                     style={{ opacity: weight }}
                     title={`${tag.name} (${tag.count})`}
@@ -583,26 +751,26 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         )}
 
         {sidebarOpen && stats && stats.videos != null && stats.channels != null && (
-          <div className="p-4 border-t border-border/80 space-y-2 text-sm text-muted-foreground">
+          <div className="p-4 border-t border-white/10 space-y-2 text-sm text-white/60">
             <div className="flex justify-between">
-              <span>Видео:</span>
-              <span className="font-medium text-foreground">{stats.videos?.count ?? '—'}</span>
+              <span className="text-white/30">Видео:</span>
+              <span className="font-medium text-white/60">{stats.videos?.count ?? '—'}</span>
             </div>
             <div className="flex justify-between">
-              <span>Загрузок:</span>
-              <span className="font-medium text-foreground">{stats?.queue?.active ?? '—'}</span>
+              <span className="text-white/30">Загрузок:</span>
+              <span className="font-medium text-white/60">{stats?.queue?.active ?? '—'}</span>
             </div>
             <div className="flex justify-between">
-              <span>Размер:</span>
-              <span className="font-medium text-foreground">{stats.videos?.totalSizeFormatted ?? '—'}</span>
+              <span className="text-white/30">Размер:</span>
+              <span className="font-medium text-white/60">{stats.videos?.totalSizeFormatted ?? '—'}</span>
             </div>
             <div className="flex justify-between">
-              <span>Подписки:</span>
-              <span className="font-medium text-foreground">{stats.channels?.subscriptions ?? '—'}</span>
+              <span className="text-white/30">Подписки:</span>
+              <span className="font-medium text-white/60">{stats.channels?.subscriptions ?? '—'}</span>
             </div>
             <div className="flex justify-between">
-              <span>Обновление:</span>
-              <span className="font-medium text-foreground text-right truncate min-w-0 ml-2">
+              <span className="text-white/30">Обновление:</span>
+              <span className="font-medium text-white/60 text-right truncate min-w-0 ml-2">
                 {stats.channels?.lastCheckAt
                   ? new Date(stats.channels.lastCheckAt)
                       .toLocaleString('ru-RU', {
@@ -618,18 +786,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
             {stats.disk && (
               <div className="flex justify-between">
-                <span>Диск:</span>
-                <span className="font-medium text-foreground">{stats.disk.freeFormatted}</span>
+                <span className="text-white/30">Диск:</span>
+                <span className="font-medium text-white/60">{stats.disk.freeFormatted}</span>
               </div>
             )}
           </div>
         )}
 
-        <div className={cn('border-t border-border/80 p-3 flex items-center', sidebarOpen ? 'justify-between' : 'justify-center')}>
+        <div className={cn('border-t border-white/10 p-3 flex items-center', sidebarOpen ? 'justify-between' : 'justify-center')}>
           {sidebarOpen ? (
             <div className="min-w-0">
-              <p className="text-sm font-medium truncate text-foreground">{userDisplay}</p>
-              <p className="text-xs text-muted-foreground truncate">{session?.user?.email || ''}</p>
+              <p className="text-sm font-medium truncate text-white">{userDisplay}</p>
+              <p className="text-xs text-white/55 truncate">{session?.user?.email || ''}</p>
             </div>
           ) : null}
           {renderUserMenu({ open: userMenuOpenSidebar, onOpenChange: setUserMenuOpenSidebar })}

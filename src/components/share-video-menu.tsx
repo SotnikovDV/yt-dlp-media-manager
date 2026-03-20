@@ -23,6 +23,8 @@ export interface ShareVideoMenuProps {
   /** Размер кнопки по умолчанию: 'sm' | 'icon' */
   triggerSize?: 'sm' | 'default' | 'icon' | 'lg';
   variant?: 'ghost' | 'secondary' | 'default';
+  /** Контейнер для портала меню (актуально в fullscreen). */
+  container?: HTMLElement | null;
 }
 
 function buildWatchUrl(baseUrl: string, videoId: string): string {
@@ -49,6 +51,7 @@ export function ShareVideoMenu({
   triggerClassName,
   triggerSize = 'sm',
   variant = 'ghost',
+  container,
 }: ShareVideoMenuProps) {
   const watchUrl = buildWatchUrl(baseUrl, videoId);
 
@@ -83,7 +86,11 @@ export function ShareVideoMenu({
       <DropdownMenuTrigger asChild onPointerDown={(e) => e.stopPropagation()}>
         {trigger}
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+      <DropdownMenuContent
+        align="end"
+        container={container ?? undefined}
+        onClick={(e) => e.stopPropagation()}
+      >
         <DropdownMenuItem onClick={handleTelegram}>
           <MessageCircle className="h-4 w-4" />
           В Telegram

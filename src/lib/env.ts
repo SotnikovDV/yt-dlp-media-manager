@@ -18,6 +18,15 @@ const MAX_MEDIA_LIBRARY_RECENT = 50;
 const MAX_SUBSCRIPTION_CHECK_VIDEO_LIMIT = 200;
 const MAX_QUEUE_MAX_CONCURRENT_DOWNLOADS = 5;
 
+/** Нормализация ввода битрейта; `null` — недопустимое значение (для валидации в API). */
+export function tryParseAudioExtractAacBitrate(raw: string): string | null {
+  const t = raw.trim().toLowerCase();
+  if (!t) return '96k';
+  if (/^\d+$/.test(t)) return `${t}k`;
+  if (/^\d+k$/.test(t)) return t;
+  return null;
+}
+
 export const env = {
   baseUrl: () =>
     getEnv('BASE_URL', getEnv('NEXTAUTH_URL', 'http://localhost:3000')).replace(/\/$/, ''),
@@ -56,4 +65,16 @@ export const env = {
   },
   telegramBotToken: () => getEnv('TELEGRAM_BOT_TOKEN', ''),
   telegramAdminChatId: () => getEnv('TELEGRAM_ADMIN_CHAT_ID', ''),
+  /**
+   * Битрейт AAC при извлечении аудио из видео (меню «Скачать» → «Аудио»).
+   * Примеры: `96k`, `128k` или число `96` → `96k`.
+   */
+  audioExtractAacBitrate: (): string => {
+    return tryParseAudioExtractAacBitrate(getEnv('AUDIO_EXTRACT_AAC_BITRATE', '')) ?? '96k';
+  },
+  /** Моно (`-ac 1`) для извлечения AAC. */
+  audioExtractAacMono: (): boolean => {
+    const raw = getEnv('AUDIO_EXTRACT_AAC_MONO', '').trim().toLowerCase();
+    return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+  },
 };

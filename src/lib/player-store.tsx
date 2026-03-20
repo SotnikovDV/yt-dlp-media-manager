@@ -9,7 +9,7 @@ export interface GlobalPlayerTrack {
   src: string;
   /** Полный URL/путь к видео-файлу (.mp4). Если не задан, используется src. */
   videoSrc?: string;
-  /** Полный URL/путь к аудио-файлу (например, .webp с аудио). */
+  /** URL того же потока, что и видео (/api/stream/…), для режима «только аудио» в мини-плеере. */
   audioSrc?: string;
   title: string;
   channelName?: string;

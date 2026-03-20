@@ -57,6 +57,7 @@ import {
   Star,
   CalendarClock,
   ListPlus,
+  Pin,
   Share2,
   LayoutGrid,
   MoreHorizontal,
@@ -136,7 +137,6 @@ import {
 } from "@dnd-kit/sortable";
 import { VideoCard, type VideoCardVideo } from "@/components/video-card";
 import { SortableVideoCard } from "@/components/sortable-video-card";
-import { ShareVideoMenu } from "@/components/share-video-menu";
 import {
   Pagination,
   PaginationContent,
@@ -145,7 +145,14 @@ import {
   PaginationNext,
 } from "@/components/ui/pagination";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { VideoDescriptionDialog } from "@/components/video-description-dialog";
+import {
+  beginSubscriptionCheckActivity,
+  endSubscriptionCheckActivity,
+} from "@/lib/client-subscription-check-activity";
+import {
+  VideoDescriptionDialog,
+  type VideoDescriptionActions,
+} from "@/components/video-description-dialog";
 import type {
   PlaybackQueueContext,
   PlaybackQueueSource,
@@ -185,6 +192,8 @@ interface VideoType {
     watchCount: number;
   } | null;
   favorites?: { id: string }[];
+  bookmarks?: { id: string }[];
+  pins?: { id: string }[];
   /** Категория подписки/канала, откуда пришло видео (для бейджа). */
   subscriptionCategory?: { id: string; name: string; backgroundColor: string } | null;
 }
@@ -1010,10 +1019,8 @@ function MediaManagerContent() {
           video.filePath || video.thumbnailUrl
             ? `/api/thumbnail/${video.id}`
             : undefined;
-        const audioSrc =
-          typeof src === "string"
-            ? src.replace(/\.[^./]+$/, ".webp")
-            : undefined;
+        // Аудио — та же дорожка, что в видео (локальный mp4/webm/mkv); не .webp (это превью).
+        const audioSrc = typeof src === "string" ? src : undefined;
         setTrack({
           id: src,
           src,
@@ -1106,7 +1113,7 @@ function MediaManagerContent() {
           id: src,
           src,
           videoSrc: src,
-          audioSrc: src.replace(/\.[^./]+$/, ".webp"),
+          audioSrc: src,
           title: fullVideo.title,
           channelName: fullVideo.channel?.name ?? undefined,
           channelId: fullVideo.channel?.id ?? undefined,
@@ -1132,7 +1139,7 @@ function MediaManagerContent() {
           id: src,
           src,
           videoSrc: src,
-          audioSrc: src.replace(/\.[^./]+$/, ".webp"),
+          audioSrc: src,
           title: fullVideo.title,
           channelName: fullVideo.channel?.name ?? undefined,
           channelId: fullVideo.channel?.id ?? undefined,
@@ -2157,6 +2164,8 @@ function MediaManagerContent() {
         autoplayOnOpen?: boolean;
         telegramBotToken?: string;
         telegramAdminChatId?: string;
+        audioExtractAacBitrate?: string;
+        audioExtractAacMono?: boolean;
       }
     | undefined;
 
@@ -2170,6 +2179,8 @@ function MediaManagerContent() {
     autoplayOnOpen: boolean;
     telegramBotToken: string;
     telegramAdminChatId: string;
+    audioExtractAacBitrate: string;
+    audioExtractAacMono: boolean;
   } | null>(null);
   const [settingsDirty, setSettingsDirty] = useState(false);
 
@@ -2207,6 +2218,8 @@ function MediaManagerContent() {
       autoplayOnOpen: s.autoplayOnOpen ?? true,
       telegramBotToken: String(s.telegramBotToken ?? ""),
       telegramAdminChatId: String(s.telegramAdminChatId ?? ""),
+      audioExtractAacBitrate: String(s.audioExtractAacBitrate ?? "96k"),
+      audioExtractAacMono: s.audioExtractAacMono ?? false,
     });
   }, [settings, settingsDirty]);
 
@@ -2243,6 +2256,8 @@ function MediaManagerContent() {
         autoplayOnOpen: settingsDraft.autoplayOnOpen ? "1" : "0",
         telegramBotToken: settingsDraft.telegramBotToken,
         telegramAdminChatId: settingsDraft.telegramAdminChatId,
+        audioExtractAacBitrate: settingsDraft.audioExtractAacBitrate,
+        audioExtractAacMono: settingsDraft.audioExtractAacMono ? "1" : "0",
       });
     },
     onSuccess: () => {
@@ -2670,6 +2685,10 @@ function MediaManagerContent() {
 
   const checkSubscriptionsMutation = useMutation({
     mutationFn: api.subscriptions.check,
+    onMutate: () => {
+      if (typeof window === "undefined") return;
+      beginSubscriptionCheckActivity();
+    },
     onSuccess: (data: {
       success?: boolean;
       aborted?: boolean;
@@ -2683,6 +2702,10 @@ function MediaManagerContent() {
       }
       queryClient.invalidateQueries({ queryKey: ["queue"] });
       queryClient.invalidateQueries({ queryKey: ["subscriptions"] });
+    },
+    onSettled: () => {
+      if (typeof window === "undefined") return;
+      endSubscriptionCheckActivity();
     },
   });
 
@@ -2708,6 +2731,14 @@ function MediaManagerContent() {
       queryClient.invalidateQueries({ queryKey: ["subscriptions"] });
     },
     onError: (e: Error) => toast.error(e.message),
+    onMutate: () => {
+      if (typeof window === "undefined") return;
+      beginSubscriptionCheckActivity();
+    },
+    onSettled: () => {
+      if (typeof window === "undefined") return;
+      endSubscriptionCheckActivity();
+    },
   });
 
   const checkSubscriptionsByCategoryMutation = useMutation({
@@ -2736,6 +2767,14 @@ function MediaManagerContent() {
       queryClient.invalidateQueries({ queryKey: ["subscriptions"] });
     },
     onError: (e: Error) => toast.error(e.message),
+    onMutate: () => {
+      if (typeof window === "undefined") return;
+      beginSubscriptionCheckActivity();
+    },
+    onSettled: () => {
+      if (typeof window === "undefined") return;
+      endSubscriptionCheckActivity();
+    },
   });
 
   /** Запрос метаданных по URL перед добавлением в очередь (качество, длительность и т.д.). */
@@ -3023,7 +3062,6 @@ function MediaManagerContent() {
                   Добавить подписку
                 </Button>
                 <Button
-                  className="bg-primary hover:bg-primary/90 text-primary-foreground"
                   onClick={() => setDownloadDialogOpen(true)}
                 >
                   <Plus className="mr-2 h-4 w-4" />
@@ -5340,7 +5378,6 @@ function MediaManagerContent() {
                   Проверить обновления
                 </Button>
                 <Button
-                  className="bg-primary hover:bg-primary/90 text-primary-foreground"
                   onClick={() => setSubscriptionDialogOpen(true)}
                 >
                   <Plus className="mr-2 h-4 w-4" />
@@ -6812,6 +6849,68 @@ function MediaManagerContent() {
 
           <Card className="p-2 md:p-4">
             <CardHeader>
+              <CardTitle className="text-base">Скачивание аудио (AAC)</CardTitle>
+              <CardDescription>
+                Меню «Скачать» → «Аудио» на карточке видео. Сохраняется в{" "}
+                <code className="rounded bg-muted px-1">AUDIO_EXTRACT_*</code> в{" "}
+                <code className="rounded bg-muted px-1">.env.local</code>; после
+                сохранения — перезапуск, как у остальных настроек.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="settings-aac-bitrate">Битрейт (-b:a)</Label>
+                <p className="text-sm text-muted-foreground">
+                  Например <code className="rounded bg-muted px-1">96k</code>,{" "}
+                  <code className="rounded bg-muted px-1">128k</code> или число{" "}
+                  <code className="rounded bg-muted px-1">96</code> (будет 96k)
+                </p>
+                <Input
+                  id="settings-aac-bitrate"
+                  placeholder="96k"
+                  value={settingsDraft?.audioExtractAacBitrate ?? "96k"}
+                  onChange={(e) => {
+                    setSettingsDirty(true);
+                    setSettingsDraft((prev) =>
+                      prev
+                        ? { ...prev, audioExtractAacBitrate: e.target.value }
+                        : null,
+                    );
+                  }}
+                  className="max-w-xs font-mono text-sm"
+                />
+              </div>
+              <Separator />
+              <div className="flex items-center gap-3">
+                <Checkbox
+                  id="settings-aac-mono"
+                  checked={settingsDraft?.audioExtractAacMono ?? false}
+                  onCheckedChange={(checked) => {
+                    setSettingsDirty(true);
+                    setSettingsDraft((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            audioExtractAacMono: checked === true,
+                          }
+                        : null,
+                    );
+                  }}
+                />
+                <div className="space-y-0.5">
+                  <Label htmlFor="settings-aac-mono" className="cursor-pointer">
+                    Моно (-ac 1)
+                  </Label>
+                  <p className="text-sm text-muted-foreground">
+                    Меньше размер и чуть быстрее кодирование; стерео пропадёт
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="p-2 md:p-4">
+            <CardHeader>
               <CardTitle className="text-base">Подписки</CardTitle>
               <CardDescription>
                 Настройки по умолчанию для новых подписок
@@ -7120,6 +7219,10 @@ function MediaManagerContent() {
                       (settings as any).autoplayOnOpen ?? true,
                     telegramBotToken: String(settings.telegramBotToken ?? ""),
                     telegramAdminChatId: String(settings.telegramAdminChatId ?? ""),
+                    audioExtractAacBitrate: String(
+                      settings.audioExtractAacBitrate ?? "96k",
+                    ),
+                    audioExtractAacMono: settings.audioExtractAacMono ?? false,
                   });
                 }
               }}
@@ -7266,36 +7369,51 @@ function MediaManagerContent() {
                     ? `${playingVideo.title.slice(0, 75)}…`
                     : playingVideo.title}
                 </span>
-                {playingVideo.platformId && (
+                {session?.user && (
                   <Button
                     size="icon"
                     variant="ghost"
                     className="h-8 w-8 shrink-0 cursor-pointer"
-                    asChild
+                    title={
+                      (playingVideo.bookmarks?.length ?? 0) > 0
+                        ? "Убрать из закреплённых"
+                        : "Закрепить"
+                    }
+                    disabled={bookmarkMutation.isPending}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      const isBm =
+                        (playingVideo.bookmarks?.length ?? 0) > 0;
+                      const next = !isBm;
+                      bookmarkMutation.mutate(
+                        { id: playingVideo.id, isBookmarked: next },
+                        {
+                          onSuccess: () => {
+                            setPlayingVideo((v) =>
+                              v && v.id === playingVideo.id
+                                ? {
+                                    ...v,
+                                    bookmarks: next ? [{ id: "b" }] : [],
+                                  }
+                                : v,
+                            );
+                          },
+                        },
+                      );
+                    }}
                   >
-                    <a
-                      href={`https://www.youtube.com/watch?v=${playingVideo.platformId}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title="Видео в источнике"
-                      onMouseDown={(e) => e.stopPropagation()}
-                    >
-                      <ExternalLink className="h-4 w-4" />
-                    </a>
+                    <Pin
+                      className={cn(
+                        "h-4 w-4",
+                        (playingVideo.bookmarks?.length ?? 0) > 0
+                          ? "fill-slate-500 text-slate-600"
+                          : "text-muted-foreground",
+                      )}
+                    />
                   </Button>
                 )}
-                <ShareVideoMenu
-                  videoId={playingVideo.id}
-                  title={playingVideo.title}
-                  baseUrl={
-                    (stats as StatsType)?.baseUrl ??
-                    (typeof window !== "undefined"
-                      ? window.location.origin
-                      : "")
-                  }
-                  triggerSize="icon"
-                  triggerClassName="h-8 w-8 cursor-pointer"
-                />
                 {session?.user && (
                   <DropdownMenu
                     open={playlistMenuOpenInPlayer}
@@ -7421,34 +7539,49 @@ function MediaManagerContent() {
 
           {!isDesktop && playingVideo && videoControlsVisible && (
             <div className="absolute top-2 right-2 z-50 flex gap-2">
-              {playingVideo.platformId && (
+              {session?.user && (
                 <Button
                   size="icon"
                   variant="secondary"
                   className="h-8 w-8 shrink-0 rounded-full bg-black/50 hover:bg-black/70 text-white cursor-pointer"
-                  asChild
+                  title={
+                    (playingVideo.bookmarks?.length ?? 0) > 0
+                      ? "Убрать из закреплённых"
+                      : "Закрепить"
+                  }
+                  disabled={bookmarkMutation.isPending}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const isBm =
+                      (playingVideo.bookmarks?.length ?? 0) > 0;
+                    const next = !isBm;
+                    bookmarkMutation.mutate(
+                      { id: playingVideo.id, isBookmarked: next },
+                      {
+                        onSuccess: () => {
+                          setPlayingVideo((v) =>
+                            v && v.id === playingVideo.id
+                              ? {
+                                  ...v,
+                                  bookmarks: next ? [{ id: "b" }] : [],
+                                }
+                              : v,
+                          );
+                        },
+                      },
+                    );
+                  }}
                 >
-                  <a
-                    href={`https://www.youtube.com/watch?v=${playingVideo.platformId}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title="Видео в источнике"
-                  >
-                    <ExternalLink className="h-4 w-4" />
-                  </a>
+                  <Pin
+                    className={cn(
+                      "h-4 w-4",
+                      (playingVideo.bookmarks?.length ?? 0) > 0
+                        ? "fill-white text-white"
+                        : "text-white",
+                    )}
+                  />
                 </Button>
               )}
-              <ShareVideoMenu
-                videoId={playingVideo.id}
-                title={playingVideo.title}
-                baseUrl={
-                  (stats as StatsType)?.baseUrl ??
-                  (typeof window !== "undefined" ? window.location.origin : "")
-                }
-                triggerSize="icon"
-                variant="secondary"
-                triggerClassName="h-8 w-8 shrink-0 rounded-full bg-black/50 hover:bg-black/70 text-white cursor-pointer"
-              />
               {session?.user && (
                 <DropdownMenu
                   open={playlistMenuOpenInPlayer}
@@ -7692,6 +7825,102 @@ function MediaManagerContent() {
                           ? `https://www.youtube.com/watch?v=${playingVideo.platformId}`
                           : null
                       }
+                      descriptionActions={{
+                        ...(session?.user && {
+                          favorite: {
+                            active: (playingVideo.favorites?.length ?? 0) > 0,
+                            disabled: favoriteMutation.isPending,
+                            onToggle: () => {
+                              const next = !(
+                                (playingVideo.favorites?.length ?? 0) > 0
+                              );
+                              favoriteMutation.mutate(
+                                { id: playingVideo.id, isFavorite: next },
+                                {
+                                  onSuccess: () => {
+                                    setPlayingVideo((v) =>
+                                      v && v.id === playingVideo.id
+                                        ? {
+                                            ...v,
+                                            favorites: next
+                                              ? [{ id: "1" }]
+                                              : [],
+                                          }
+                                        : v,
+                                    );
+                                  },
+                                },
+                              );
+                            },
+                          },
+                          bookmark: {
+                            active: (playingVideo.bookmarks?.length ?? 0) > 0,
+                            disabled: bookmarkMutation.isPending,
+                            onToggle: () => {
+                              const next = !(
+                                (playingVideo.bookmarks?.length ?? 0) > 0
+                              );
+                              bookmarkMutation.mutate(
+                                { id: playingVideo.id, isBookmarked: next },
+                                {
+                                  onSuccess: () => {
+                                    setPlayingVideo((v) =>
+                                      v && v.id === playingVideo.id
+                                        ? {
+                                            ...v,
+                                            bookmarks: next
+                                              ? [{ id: "1" }]
+                                              : [],
+                                          }
+                                        : v,
+                                    );
+                                  },
+                                },
+                              );
+                            },
+                          },
+                          keep: {
+                            active: (playingVideo.pins?.length ?? 0) > 0,
+                            disabled: pinMutation.isPending,
+                            onToggle: () => {
+                              const next = !(
+                                (playingVideo.pins?.length ?? 0) > 0
+                              );
+                              pinMutation.mutate(
+                                { id: playingVideo.id, pinned: next },
+                                {
+                                  onSuccess: () => {
+                                    setPlayingVideo((v) =>
+                                      v && v.id === playingVideo.id
+                                        ? {
+                                            ...v,
+                                            pins: next ? [{ id: "1" }] : [],
+                                          }
+                                        : v,
+                                    );
+                                  },
+                                },
+                              );
+                            },
+                          },
+                        }),
+                        share: {
+                          videoId: playingVideo.id,
+                          title: playingVideo.title,
+                          baseUrl:
+                            (stats as StatsType)?.baseUrl ??
+                            (typeof window !== "undefined"
+                              ? window.location.origin
+                              : ""),
+                        },
+                        ...(playingVideo.filePath && {
+                          download: {
+                            videoId: playingVideo.id,
+                            title: playingVideo.title,
+                            platformId: playingVideo.platformId,
+                          },
+                        }),
+                      }}
                     />
                   </div>
                   {isDesktop && (
@@ -8689,12 +8918,118 @@ function MediaManagerContent() {
         }}
         title={descriptionDialogVideo?.title ?? ""}
         description={descriptionDialogVideo?.description ?? ""}
-        youtubeUrl={
-          descriptionDialogVideo?.platformId
-            ? `https://www.youtube.com/watch?v=${descriptionDialogVideo.platformId}`
-            : null
-        }
         onSeekToTimeInSeconds={handleSeekFromDescription}
+        actions={
+          descriptionDialogVideo
+            ? ((): VideoDescriptionActions => {
+                const d = descriptionDialogVideo;
+                const v = d.video;
+                const baseUrlRaw =
+                  (stats as StatsType)?.baseUrl ??
+                  (typeof window !== "undefined"
+                    ? window.location.origin
+                    : "");
+                const baseUrl = baseUrlRaw.trim();
+                const actions: VideoDescriptionActions = {
+                  youtubeUrl: d.platformId
+                    ? `https://www.youtube.com/watch?v=${d.platformId}`
+                    : null,
+                };
+                if (session?.user) {
+                  actions.favorite = {
+                    active: (v.favorites?.length ?? 0) > 0,
+                    disabled: favoriteMutation.isPending,
+                    onToggle: () => {
+                      const next = !((v.favorites?.length ?? 0) > 0);
+                      favoriteMutation.mutate(
+                        { id: v.id, isFavorite: next },
+                        {
+                          onSuccess: () => {
+                            setDescriptionDialogVideo((cur) =>
+                              cur?.id === v.id
+                                ? {
+                                    ...cur,
+                                    video: {
+                                      ...cur.video,
+                                      favorites: next ? [{ id: "1" }] : [],
+                                    },
+                                  }
+                                : cur,
+                            );
+                          },
+                        },
+                      );
+                    },
+                  };
+                  actions.bookmark = {
+                    active: (v.bookmarks?.length ?? 0) > 0,
+                    disabled: bookmarkMutation.isPending,
+                    onToggle: () => {
+                      const next = !((v.bookmarks?.length ?? 0) > 0);
+                      bookmarkMutation.mutate(
+                        { id: v.id, isBookmarked: next },
+                        {
+                          onSuccess: () => {
+                            setDescriptionDialogVideo((cur) =>
+                              cur?.id === v.id
+                                ? {
+                                    ...cur,
+                                    video: {
+                                      ...cur.video,
+                                      bookmarks: next ? [{ id: "1" }] : [],
+                                    },
+                                  }
+                                : cur,
+                            );
+                          },
+                        },
+                      );
+                    },
+                  };
+                  actions.keep = {
+                    active: (v.pins?.length ?? 0) > 0,
+                    disabled: pinMutation.isPending,
+                    onToggle: () => {
+                      const next = !((v.pins?.length ?? 0) > 0);
+                      pinMutation.mutate(
+                        { id: v.id, pinned: next },
+                        {
+                          onSuccess: () => {
+                            setDescriptionDialogVideo((cur) =>
+                              cur?.id === v.id
+                                ? {
+                                    ...cur,
+                                    video: {
+                                      ...cur.video,
+                                      pins: next ? [{ id: "1" }] : [],
+                                    },
+                                  }
+                                : cur,
+                            );
+                          },
+                        },
+                      );
+                    },
+                  };
+                }
+                if (baseUrl) {
+                  actions.share = {
+                    videoId: v.id,
+                    title: v.title,
+                    baseUrl,
+                  };
+                }
+                if (v.filePath) {
+                  actions.download = {
+                    videoId: v.id,
+                    title: v.title,
+                    platformId: v.platformId,
+                  };
+                }
+                return actions;
+              })()
+            : undefined
+        }
       />
     </>
   );

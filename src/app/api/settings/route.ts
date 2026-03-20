@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
-import { env } from '@/lib/env';
+import { env, tryParseAudioExtractAacBitrate } from '@/lib/env';
 import { readEnvSettings, writeEnvSettings } from '@/lib/env-file';
 
 export const runtime = 'nodejs';
@@ -13,6 +13,11 @@ async function requireAdmin() {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
   return null;
+}
+
+function parseEnvMono(v: string): boolean {
+  const raw = v.trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
 }
 
 /**
@@ -43,6 +48,14 @@ export async function GET() {
           : env.autoplayOnOpen(),
       telegramBotToken: fromFile.TELEGRAM_BOT_TOKEN ?? env.telegramBotToken(),
       telegramAdminChatId: fromFile.TELEGRAM_ADMIN_CHAT_ID ?? env.telegramAdminChatId(),
+      audioExtractAacBitrate:
+        typeof fromFile.AUDIO_EXTRACT_AAC_BITRATE === 'string'
+          ? tryParseAudioExtractAacBitrate(fromFile.AUDIO_EXTRACT_AAC_BITRATE) ?? '96k'
+          : env.audioExtractAacBitrate(),
+      audioExtractAacMono:
+        typeof fromFile.AUDIO_EXTRACT_AAC_MONO === 'string'
+          ? parseEnvMono(fromFile.AUDIO_EXTRACT_AAC_MONO)
+          : env.audioExtractAacMono(),
     });
   } catch (error) {
     console.error('Error fetching settings:', error);
@@ -90,6 +103,27 @@ export async function PUT(request: NextRequest) {
     }
     if (typeof body.telegramAdminChatId === 'string') {
       updates.TELEGRAM_ADMIN_CHAT_ID = body.telegramAdminChatId;
+    }
+    if (typeof body.audioExtractAacBitrate === 'string') {
+      const parsed = tryParseAudioExtractAacBitrate(body.audioExtractAacBitrate);
+      if (parsed === null) {
+        return NextResponse.json(
+          { error: 'Некорректный битрейт AAC (например 96k, 128k или 96)' },
+          { status: 400 }
+        );
+      }
+      updates.AUDIO_EXTRACT_AAC_BITRATE = parsed;
+    }
+    if (typeof body.audioExtractAacMono !== 'undefined') {
+      const raw = body.audioExtractAacMono;
+      const b =
+        raw === true ||
+        raw === 1 ||
+        raw === '1' ||
+        raw === 'true' ||
+        raw === 'yes' ||
+        raw === 'on';
+      updates.AUDIO_EXTRACT_AAC_MONO = b ? '1' : '0';
     }
 
     if (Object.keys(updates).length === 0) {

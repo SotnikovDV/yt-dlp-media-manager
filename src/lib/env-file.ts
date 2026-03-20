@@ -12,6 +12,8 @@ const ENV_KEYS = [
   'AUTOPLAY_ON_OPEN',
   'TELEGRAM_BOT_TOKEN',
   'TELEGRAM_ADMIN_CHAT_ID',
+  'AUDIO_EXTRACT_AAC_BITRATE',
+  'AUDIO_EXTRACT_AAC_MONO',
 ] as const;
 
 function getEnvPath(): string {
