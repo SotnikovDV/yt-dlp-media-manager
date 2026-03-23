@@ -596,7 +596,7 @@ export function VideoCard<T extends VideoCardVideo>({
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         disabled={audioDownloadBusy}
-                        title="AAC (.m4a). Ход подготовки — пульсация «Media Manager» в шапке. Битрейт и моно — в Настройках (админ) или AUDIO_EXTRACT_AAC_* в .env.local."
+                        title="AAC (.m4a). Ход подготовки — пульсация «DVStream» в шапке. Битрейт и моно — в Настройках (админ) или AUDIO_EXTRACT_AAC_* в .env.local."
                         onClick={() => {
                           if (audioDownloadBusy) return;
                           setContextMenuOpen(false);

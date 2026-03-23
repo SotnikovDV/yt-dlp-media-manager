@@ -41,7 +41,7 @@ function truncateForToastFilename(name: string, max: number): string {
 }
 
 /**
- * Скачивание через fetch: ход процесса — пульсация заголовка «Media Manager» (см. app-shell + очередь).
+ * Скачивание через fetch: ход процесса — пульсация заголовка «DVStream» (см. app-shell + очередь).
  * По завершении — короткий тост с именем файла. Blob в памяти.
  */
 export async function fetchAndSavePreparedAudio(video: {

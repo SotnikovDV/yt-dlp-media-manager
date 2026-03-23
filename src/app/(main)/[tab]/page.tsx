@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Главная страница приложения Media Manager.
+ * Главная страница приложения DVStream.
  * Медиатека, подписки на каналы, очередь загрузок, настройки, видеоплеер.
  * Состояние вкладок в URL-пут: /library, /subscriptions, /queue, /settings. Остальные query — ?channelId=, ?fromTab=.
  */

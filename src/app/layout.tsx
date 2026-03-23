@@ -6,7 +6,7 @@ import { Providers } from "./providers";
 import { DefaultAdminBanner } from "@/components/default-admin-banner";
 
 export const metadata: Metadata = {
-  title: "DVSt Media Manager",
+  title: "DVStream",
   description: "Персональный медиацентр для загрузки и просмотра видео с YouTube",
   keywords: ["yt-dlp", "youtube", "video", "download", "media", "manager"],
   authors: [{ name: "2026 © DVSt Home" }],

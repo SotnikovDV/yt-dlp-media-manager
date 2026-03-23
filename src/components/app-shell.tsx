@@ -551,7 +551,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               isGlobalHeaderBusy && 'text-primary animate-pulse',
             )}
           >
-            <span className="shrink-0">Media Manager</span>
+            <span className="shrink-0">DVStream</span>
             {backgroundTaskTotal > 0 && (
               <span
                 className="inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-md bg-primary/20 px-1 text-[10px] font-semibold tabular-nums text-primary animate-none"

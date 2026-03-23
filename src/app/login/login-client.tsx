@@ -86,7 +86,7 @@ export default function LoginClient() {
               </div>
               <div className="flex flex-col">
                 <span className="text-sm font-semibold tracking-tight">
-                  <span className="font-bold">DVSt</span> Media Manager
+                  <span className="font-bold">DVStream</span>
                 </span>
               </div>
             </div>

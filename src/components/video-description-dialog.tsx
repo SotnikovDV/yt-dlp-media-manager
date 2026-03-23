@@ -294,7 +294,7 @@ function DescriptionActionsToolbar({ actions }: { actions: VideoDescriptionActio
               </DropdownMenuItem>
               <DropdownMenuItem
                 disabled={audioBusy}
-                title="AAC (.m4a). Ход подготовки — пульсация «Media Manager» в шапке."
+                title="AAC (.m4a). Ход подготовки — пульсация «DVStream» в шапке."
                 onClick={() => {
                   if (audioBusy) return;
                   setAudioBusy(true);
