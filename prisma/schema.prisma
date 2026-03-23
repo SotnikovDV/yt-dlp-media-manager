@@ -167,6 +167,7 @@ model Subscription {
   preferredQuality String?  @default("best")
   outputFolder     String?
   isActive         Boolean  @default(true)
+  isPublic         Boolean  @default(false)
   checkInterval    Int      @default(360)
   lastCheckAt      DateTime?
   createdAt        DateTime @default(now())

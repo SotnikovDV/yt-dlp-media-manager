@@ -16,6 +16,7 @@ import {
   Menu,
   X,
   FolderOpen,
+  ArrowLeftFromLine,
   Tag,
   Music2,
 } from 'lucide-react';
@@ -608,11 +609,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           sidebarOpen ? 'w-64' : 'w-16'
         )}
       >
-        <div className="px-2 py-4 border-b border-white/10 flex items-center justify-between min-h-[56px]">
+        <div className={cn(
+          'px-2 py-4 border-b border-white/10 flex items-center min-h-[56px]',
+          sidebarOpen ? 'justify-between' : 'justify-center'
+        )}>
           {sidebarOpen && (
             <div className="flex min-w-0 items-center gap-2">
               <div className="h-7 w-7 rounded-[7px] bg-[#2563eb] flex items-center justify-center text-white shadow-sm shrink-0">
-                <Video className="h-5 w-5" />
+                {/* <Video className="h-5 w-5" /> */}
+                <svg viewBox="0 0 24 24" className="h-5 w-4 ml-1" fill="white"><path d="M5 3l14 9-14 9V3z"></path></svg>
               </div>
               <Link
                 href="/library"
@@ -626,7 +631,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     : undefined
                 }
               >
-                <span className="truncate">Media Manager</span>
+                <span className="truncate from-blue-500 to-sky-100 bg-gradient-to-r bg-clip-text text-transparent">DVStream</span>
                 {backgroundTaskTotal > 0 && (
                   <span
                     className="inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-md bg-[#2563eb]/40 px-1.5 text-[11px] font-semibold tabular-nums text-[#93c5fd] animate-none"
@@ -638,8 +643,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </Link>
             </div>
           )}
-          <Button variant="ghost" size="icon" onClick={() => setSidebarOpen(!sidebarOpen)}>
-            <FolderOpen className="h-4 w-4" />
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            className="text-white/55 hover:bg-white/7 hover:text-white"
+          >
+            {sidebarOpen ? (
+              <ArrowLeftFromLine className="h-4 w-4" />
+            ) : (
+              <FolderOpen className="h-4 w-4" />
+            )}
           </Button>
         </div>
 
@@ -664,7 +678,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     'group relative flex items-center rounded-lg py-2.5 text-sm font-medium transition-colors w-full',
                     sidebarOpen ? 'px-3 gap-3' : 'px-0 justify-center',
                     active
-                      ? 'bg-[#2563eb]/20 text-white'
+                      ? 'bg-[#2563eb]/20 text-sky-500'
                       : sidebarOpen
                         ? 'text-white/55 hover:bg-white/7 hover:text-white'
                         : 'text-white/55 hover:bg-white/7'

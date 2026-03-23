@@ -54,6 +54,7 @@ import {
   User,
   Shield,
   Copy,
+  Link2,
   Star,
   CalendarClock,
   ListPlus,
@@ -61,6 +62,8 @@ import {
   Share2,
   LayoutGrid,
   MoreHorizontal,
+  Lock,
+  Globe,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -215,6 +218,7 @@ interface SubscriptionType {
   autoDeleteDays: number;
   preferredQuality: string | null;
   isActive: boolean;
+  isPublic?: boolean;
   checkInterval: number;
   lastCheckAt: Date | null;
   categoryId?: string | null;
@@ -686,6 +690,7 @@ const api = {
         preferredQuality?: string;
         categoryId?: string | null;
         autoDeleteDays?: number;
+        isPublic?: boolean;
       },
     ) => {
       const res = await fetch(`/api/subscriptions/${id}`, {
@@ -722,6 +727,18 @@ const api = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+      });
+      return jsonOrThrow(res);
+    },
+    available: async () => {
+      const res = await fetch("/api/subscriptions/available");
+      return jsonOrThrow(res);
+    },
+    addFromAvailable: async (subscriptionId: string) => {
+      const res = await fetch("/api/subscriptions/add-from-available", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subscriptionId }),
       });
       return jsonOrThrow(res);
     },
@@ -1441,6 +1458,8 @@ function MediaManagerContent() {
   const [editSubscriptionCategoryId, setEditSubscriptionCategoryId] = useState<
     string | null
   >(null);
+  const [editSubscriptionIsPublic, setEditSubscriptionIsPublic] =
+    useState(false);
 
   const [searchQuery, setSearchQuery] = useState("");
   // Медиатека: выбранный канал (показ видео канала) и источник открытия (для кнопки «Назад»)
@@ -1690,6 +1709,41 @@ function MediaManagerContent() {
         try {
           localStorage.setItem(
             SUBSCRIPTION_SECTIONS_STORAGE_KEY,
+            JSON.stringify(next),
+          );
+        } catch {}
+        return next;
+      });
+    },
+    [],
+  );
+
+  // Сворачивание групп категорий в секции «Доступные»
+  const AVAILABLE_SECTIONS_STORAGE_KEY = "yd-mm-available-sections-collapsed";
+  const [availableSectionsCollapsed, setAvailableSectionsCollapsed] =
+    useState<Record<string, boolean>>(() => {
+      if (typeof window === "undefined") return {};
+      try {
+        const raw = localStorage.getItem(AVAILABLE_SECTIONS_STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw) as Record<string, boolean>;
+          return parsed ?? {};
+        }
+      } catch {}
+      return {};
+    });
+  const setAvailableSectionCollapsed = useCallback(
+    (key: string, collapsed: boolean) => {
+      setAvailableSectionsCollapsed((prev) => {
+        const next = collapsed
+          ? { ...prev, [key]: true }
+          : {
+              ...Object.fromEntries(Object.keys(prev).map((k) => [k, true])),
+              [key]: false,
+            };
+        try {
+          localStorage.setItem(
+            AVAILABLE_SECTIONS_STORAGE_KEY,
             JSON.stringify(next),
           );
         } catch {}
@@ -2084,6 +2138,13 @@ function MediaManagerContent() {
     queryKey: ["subscriptions"],
     queryFn: api.subscriptions.list,
   });
+
+  const { data: availableSubscriptions, isLoading: availableLoading } =
+    useQuery({
+      queryKey: ["subscriptions-available"],
+      queryFn: api.subscriptions.available,
+      enabled: activeTab === "subscriptions",
+    });
 
   const { data: playlistVideosData } = useQuery({
     queryKey: [
@@ -2529,6 +2590,7 @@ function MediaManagerContent() {
         preferredQuality: editSubscriptionQuality,
         categoryId: editSubscriptionCategoryId || null,
         autoDeleteDays: editSubscriptionAutoDeleteDays,
+        isPublic: editSubscriptionIsPublic,
       }),
     onSuccess: () => {
       toast.success("Подписка обновлена");
@@ -2538,6 +2600,29 @@ function MediaManagerContent() {
     onError: (error: Error) => {
       toast.error(`Ошибка: ${error.message}`);
     },
+  });
+
+  const toggleSubscriptionPublicMutation = useMutation({
+    mutationFn: ({ id, isPublic }: { id: string; isPublic: boolean }) =>
+      api.subscriptions.update(id, { isPublic }),
+    onSuccess: (_, { isPublic }) => {
+      toast.success(isPublic ? "Подписка сделана публичной" : "Подписка сделана частной");
+      queryClient.invalidateQueries({ queryKey: ["subscriptions"] });
+      queryClient.invalidateQueries({ queryKey: ["subscriptions-available"] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const addFromAvailableMutation = useMutation({
+    mutationFn: (subscriptionId: string) =>
+      api.subscriptions.addFromAvailable(subscriptionId),
+    onSuccess: () => {
+      toast.success("Подписка добавлена");
+      queryClient.invalidateQueries({ queryKey: ["subscriptions"] });
+      queryClient.invalidateQueries({ queryKey: ["subscriptions-available"] });
+      queryClient.invalidateQueries({ queryKey: ["stats"] });
+    },
+    onError: (e: Error) => toast.error(e.message),
   });
 
   const cancelTaskMutation = useMutation({
@@ -3331,6 +3416,9 @@ function MediaManagerContent() {
                                     );
                                     setEditSubscriptionCategoryId(
                                       sub.categoryId ?? null,
+                                    );
+                                    setEditSubscriptionIsPublic(
+                                      !!sub.isPublic,
                                     );
                                   }}
                                 >
@@ -5387,25 +5475,33 @@ function MediaManagerContent() {
             </div>
           </div>
 
-          {subscriptionsLoading ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {[...Array(3)].map((_, i) => (
-                <Card key={i}>
-                  <CardContent className="p-4">
-                    <div className="h-12 bg-muted rounded animate-pulse" />
-                  </CardContent>
-                </Card>
-              ))}
+          {/* Секция «Мои подписки» (оформление как на Медиатека/Очередь) */}
+          <section className="rounded-xl border border-border/60 surface shadow-elevation-1 px-4 lg:px-6 overflow-hidden">
+            <div className="flex items-center gap-2 -mx-4 w-[calc(100%+2rem)] px-2 py-2 bg-[#F1F5F9] border-b border-border lg:-mx-6 lg:w-[calc(100%+3rem)] lg:px-4">
+              <Rss className="h-4 w-4 text-slate-400 shrink-0" />
+              <h2 className="text-xs font-medium text-slate-400 uppercase tracking-wider text-muted-foreground">
+                Мои подписки
+              </h2>
             </div>
-          ) : subscriptions?.length > 0 ? (
-            (() => {
-              const UNCATEGORIZED_KEY = "__none__";
-              const subsList = subscriptions as SubscriptionType[];
-              if ((subscriptionCategories?.length ?? 0) === 0) {
-                return (
-                  <div className="space-y-6">
-                    <section>
-                      <div className="flex items-center gap-2 mb-3">
+            <div className="-mx-4 px-4 py-4 bg-muted/80 lg:-mx-6 lg:px-6">
+            {subscriptionsLoading ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                {[...Array(3)].map((_, i) => (
+                  <Card key={i}>
+                    <CardContent className="p-4">
+                      <div className="h-12 bg-muted rounded animate-pulse" />
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            ) : subscriptions?.length > 0 ? (
+              (() => {
+                const UNCATEGORIZED_KEY = "__none__";
+                const subsList = subscriptions as SubscriptionType[];
+                if ((subscriptionCategories?.length ?? 0) === 0) {
+                  return (
+                    <div className="mt-0">
+                      <div className="flex items-center gap-2 -mx-4 w-[calc(100%+2rem)] px-4 py-2 bg-muted/30 border-b border-border lg:-mx-6 lg:w-[calc(100%+3rem)] lg:px-6">
                         <button
                           type="button"
                           onClick={() =>
@@ -5418,15 +5514,15 @@ function MediaManagerContent() {
                               ),
                             )
                           }
-                          className="flex items-center gap-2 flex-1 min-w-0 text-left group cursor-pointer"
+                          className="flex items-center gap-2 flex-1 min-w-0 text-left cursor-pointer hover:opacity-80"
                         >
                           {(subscriptionSectionsCollapsed[UNCATEGORIZED_KEY] ??
                           true) ? (
-                            <ChevronDown className="h-5 w-5 text-muted-foreground shrink-0" />
+                            <ChevronRight className="h-5 w-5 text-muted-foreground shrink-0" />
                           ) : (
-                            <ChevronUp className="h-5 w-5 text-muted-foreground shrink-0" />
+                            <ChevronDown className="h-5 w-5 text-muted-foreground shrink-0" />
                           )}
-                          <h3 className="text-lg font-semibold group-hover:opacity-80">
+                          <h3 className="text-base font-semibold flex-1 min-w-0 truncate">
                             Без категории
                           </h3>
                           <span className="text-sm text-muted-foreground font-normal">
@@ -5562,9 +5658,33 @@ function MediaManagerContent() {
                                   </div>
                                 </CardContent>
                                 <CardFooter
-                                  className="pt-2 flex gap-1 justify-end"
+                                  className="pt-2 flex gap-1 justify-end flex-wrap"
                                   onClick={(e) => e.stopPropagation()}
                                 >
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    title={
+                                      sub.isPublic
+                                        ? "Публичная (нажмите, чтобы сделать частной)"
+                                        : "Частная (нажмите, чтобы сделать публичной)"
+                                    }
+                                    onClick={() =>
+                                      toggleSubscriptionPublicMutation.mutate({
+                                        id: sub.id,
+                                        isPublic: !sub.isPublic,
+                                      })
+                                    }
+                                    disabled={
+                                      toggleSubscriptionPublicMutation.isPending
+                                    }
+                                  >
+                                    {sub.isPublic ? (
+                                      <Globe className="h-4 w-4 text-primary" />
+                                    ) : (
+                                      <Lock className="h-4 w-4" />
+                                    )}
+                                  </Button>
                                   {sub.channel.platformId && (
                                     <Button
                                       size="sm"
@@ -5639,30 +5759,32 @@ function MediaManagerContent() {
                                       setEditSubscriptionAutoDeleteDays(
                                         sub.autoDeleteDays ?? 30,
                                       );
-                                      setEditSubscriptionCategoryId(
-                                        sub.categoryId ?? null,
-                                      );
-                                    }}
-                                  >
-                                    <Pencil className="h-4 w-4" />
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    title="Удалить подписку"
-                                    onClick={() =>
-                                      setDeleteSubscriptionId(sub.id)
-                                    }
-                                  >
-                                    <Trash2 className="h-4 w-4" />
-                                  </Button>
-                                </CardFooter>
-                              </Card>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </section>
+                                    setEditSubscriptionCategoryId(
+                                      sub.categoryId ?? null,
+                                    );
+                                    setEditSubscriptionIsPublic(
+                                      !!sub.isPublic,
+                                    );
+                                  }}
+                                >
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  title="Удалить подписку"
+                                  onClick={() =>
+                                    setDeleteSubscriptionId(sub.id)
+                                  }
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </CardFooter>
+                            </Card>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 );
               }
@@ -5693,26 +5815,26 @@ function MediaManagerContent() {
                 });
               }
               return (
-                <div className="space-y-6">
+                <div className="mt-0 space-y-0">
                   {sections.map(({ key, label, subs }) => {
                     const collapsed =
                       subscriptionSectionsCollapsed[key] ?? true;
                     return (
-                      <section key={key}>
-                        <div className="flex items-center gap-2 mb-3">
+                      <div key={key} className="mt-0">
+                        <div className="flex items-center gap-2 -mx-4 w-[calc(100%+2rem)] px-4 py-2 bg-muted/30 border-b border-border lg:-mx-6 lg:w-[calc(100%+3rem)] lg:px-6">
                           <button
                             type="button"
                             onClick={() =>
                               setSubscriptionSectionCollapsed(key, !collapsed)
                             }
-                            className="flex items-center gap-2 flex-1 min-w-0 text-left group cursor-pointer"
+                            className="flex items-center gap-2 flex-1 min-w-0 text-left cursor-pointer hover:opacity-80"
                           >
                             {collapsed ? (
-                              <ChevronDown className="h-5 w-5 text-muted-foreground shrink-0" />
+                              <ChevronRight className="h-5 w-5 text-muted-foreground shrink-0" />
                             ) : (
-                              <ChevronUp className="h-5 w-5 text-muted-foreground shrink-0" />
+                              <ChevronDown className="h-5 w-5 text-muted-foreground shrink-0" />
                             )}
-                            <h3 className="text-lg font-semibold group-hover:opacity-80">
+                            <h3 className="text-base font-semibold flex-1 min-w-0 truncate">
                               {label}
                             </h3>
                             <span className="text-sm text-muted-foreground font-normal">
@@ -5855,9 +5977,32 @@ function MediaManagerContent() {
                                       </div>
                                     </CardContent>
                                     <CardFooter
-                                      className="pt-2 flex gap-1 justify-end"
+                                      className="pt-2 flex gap-1 justify-end flex-wrap"
                                       onClick={(e) => e.stopPropagation()}
                                     >
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        title={
+                                          sub.isPublic
+                                            ? "Публичная (нажмите, чтобы сделать частной)"
+                                            : "Частная (нажмите, чтобы сделать публичной)"
+                                        }
+                                        onClick={() =>
+                                          toggleSubscriptionPublicMutation.mutate(
+                                            { id: sub.id, isPublic: !sub.isPublic },
+                                          )
+                                        }
+                                        disabled={
+                                          toggleSubscriptionPublicMutation.isPending
+                                        }
+                                      >
+                                        {sub.isPublic ? (
+                                          <Globe className="h-4 w-4 text-primary" />
+                                        ) : (
+                                          <Lock className="h-4 w-4" />
+                                        )}
+                                      </Button>
                                       {sub.channel.platformId && (
                                         <Button
                                           size="sm"
@@ -5939,6 +6084,9 @@ function MediaManagerContent() {
                                           setEditSubscriptionCategoryId(
                                             sub.categoryId ?? null,
                                           );
+                                          setEditSubscriptionIsPublic(
+                                            !!sub.isPublic,
+                                          );
                                         }}
                                       >
                                         <Pencil className="h-4 w-4" />
@@ -5972,7 +6120,7 @@ function MediaManagerContent() {
                             </div>
                           </>
                         )}
-                      </section>
+                      </div>
                     );
                   })}
                 </div>
@@ -5991,6 +6139,210 @@ function MediaManagerContent() {
               </Button>
             </Card>
           )}
+            </div>
+          </section>
+
+          {/* Секция «Доступные» (оформление как на Медиатека/Очередь) */}
+          <section className="rounded-xl border border-border/60 surface shadow-elevation-1 px-4 lg:px-6 overflow-hidden">
+            <div className="flex items-center gap-2 -mx-4 w-[calc(100%+2rem)] px-2 py-2 bg-[#F1F5F9] border-b border-border lg:-mx-6 lg:w-[calc(100%+3rem)] lg:px-4">
+              <Globe className="h-4 w-4 text-slate-400 shrink-0" />
+              <h2 className="text-xs font-medium text-slate-400 uppercase tracking-wider text-muted-foreground">
+                Доступные
+              </h2>
+            </div>
+            <div className="-mx-4 px-4 py-4 bg-muted/80 lg:-mx-6 lg:px-6">
+            {availableLoading ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                {[...Array(2)].map((_, i) => (
+                  <Card key={i}>
+                    <CardContent className="p-4">
+                      <div className="h-12 bg-muted rounded animate-pulse" />
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            ) : Array.isArray(availableSubscriptions) &&
+              availableSubscriptions.length > 0 ? (
+              (() => {
+                const UNCATEGORIZED_KEY = "__none__";
+                const availableList =
+                  (availableSubscriptions ?? []) as SubscriptionType[];
+                const byCategory = new Map<
+                  string | null,
+                  SubscriptionType[]
+                >();
+                for (const sub of availableList) {
+                  const key = sub.categoryId ?? null;
+                  const arr = byCategory.get(key) ?? [];
+                  arr.push(sub);
+                  byCategory.set(key, arr);
+                }
+                const sections: {
+                  key: string;
+                  label: string;
+                  subs: SubscriptionType[];
+                }[] = [];
+                for (const cat of subscriptionCategories ?? []) {
+                  const subs = byCategory.get(cat.id) ?? [];
+                  if (subs.length > 0) {
+                    sections.push({
+                      key: cat.id,
+                      label: cat.name,
+                      subs,
+                    });
+                  }
+                }
+                const uncategorized = byCategory.get(null) ?? [];
+                if (uncategorized.length > 0) {
+                  sections.push({
+                    key: UNCATEGORIZED_KEY,
+                    label: "Без категории",
+                    subs: uncategorized,
+                  });
+                }
+                if (sections.length === 0) return null;
+                return (
+                  <div className="mt-0 space-y-0">
+                    {sections.map(({ key, label, subs }) => {
+                      const collapsed = availableSectionsCollapsed[key] ?? true;
+                      return (
+                        <div key={key} className="mt-0">
+                          <div className="flex items-center gap-2 -mx-4 w-[calc(100%+2rem)] px-4 py-2 bg-muted/30 border-b border-border lg:-mx-6 lg:w-[calc(100%+3rem)] lg:px-6">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setAvailableSectionCollapsed(key, !collapsed)
+                              }
+                              className="flex items-center gap-2 flex-1 min-w-0 text-left cursor-pointer hover:opacity-80"
+                            >
+                              {collapsed ? (
+                                <ChevronRight className="h-5 w-5 text-muted-foreground shrink-0" />
+                              ) : (
+                                <ChevronDown className="h-5 w-5 text-muted-foreground shrink-0" />
+                              )}
+                              <span className="text-base font-semibold flex-1 min-w-0 truncate">
+                                {label}
+                              </span>
+                              <span className="text-sm text-muted-foreground font-normal">
+                                ({subs.length})
+                              </span>
+                            </button>
+                          </div>
+                          {!collapsed && (
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 px-4 py-4 lg:px-6">
+                              {subs.map((sub: SubscriptionType) => {
+                                const gradient = sub.category?.backgroundColor
+                                  ? getOmbreGradient(
+                                      sub.category.backgroundColor,
+                                    )
+                                  : null;
+                                return (
+                                  <Card
+                                    key={sub.id}
+                                    className="hover:bg-muted/50 transition-colors"
+                                    style={
+                                      gradient
+                                        ? {
+                                            background: `linear-gradient(0deg, ${gradient.from}, ${gradient.to})`,
+                                          }
+                                        : undefined
+                                    }
+                                  >
+                                    <CardHeader className="pb-2">
+                                      <div className="flex items-center gap-3">
+                                        {avatarFallback[sub.channel.id] &&
+                                        !sub.channel.avatarUrl ? (
+                                          <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center">
+                                            <Youtube className="h-5 w-5" />
+                                          </div>
+                                        ) : (
+                                          <img
+                                            src={
+                                              avatarFallback[sub.channel.id]
+                                                ? (sub.channel.avatarUrl ?? "")
+                                                : `/api/channel-avatar/${sub.channel.id}`
+                                            }
+                                            alt={sub.channel.name}
+                                            className="w-10 h-10 rounded-full"
+                                            onError={() =>
+                                              setAvatarFallback((prev) => ({
+                                                ...prev,
+                                                [sub.channel.id]: true,
+                                              }))
+                                            }
+                                          />
+                                        )}
+                                        <div className="min-w-0 flex-1">
+                                          <CardTitle className="text-base truncate">
+                                            {sub.channel.name}
+                                          </CardTitle>
+                                          <CardDescription>
+                                            <span>
+                                              {sub.channel._count?.videos || 0}{" "}
+                                              видео
+                                            </span>
+                                          </CardDescription>
+                                        </div>
+                                      </div>
+                                    </CardHeader>
+                                    <CardContent>
+                                      <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                                        <Badge variant="outline">
+                                          <Clock className="mr-1 h-3 w-3" />
+                                          {sub.downloadDays} дней
+                                        </Badge>
+                                        {sub.preferredQuality && (
+                                          <Badge variant="outline">
+                                            {sub.preferredQuality}
+                                          </Badge>
+                                        )}
+                                      </div>
+                                    </CardContent>
+                                    <CardFooter
+                                      className="pt-2"
+                                      onClick={(e) => e.stopPropagation()}
+                                    >
+                                      <Button
+                                        size="sm"
+                                        onClick={() =>
+                                          addFromAvailableMutation.mutate(
+                                            sub.id,
+                                          )
+                                        }
+                                        disabled={
+                                          addFromAvailableMutation.isPending &&
+                                          addFromAvailableMutation.variables ===
+                                            sub.id
+                                        }
+                                      >
+                                        {addFromAvailableMutation.isPending &&
+                                        addFromAvailableMutation.variables ===
+                                          sub.id ? (
+                                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                        ) : (
+                                          <Plus className="mr-2 h-4 w-4" />
+                                        )}
+                                        Добавить к подпискам
+                                      </Button>
+                                    </CardFooter>
+                                  </Card>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Нет доступных подписок от других пользователей
+              </p>
+            )}
+            </div>
+          </section>
         </div>
       )}
 
@@ -6558,6 +6910,11 @@ function MediaManagerContent() {
                                   </span>
                                 )}
                               </div>
+                              {task.errorMsg && (
+                                <p className="text-xs text-amber-600 dark:text-amber-500 mt-2" title="Причина отвержения">
+                                  {task.errorMsg}
+                                </p>
+                              )}
                             </div>
                             <div className="flex gap-1" />
                           </div>
@@ -7737,6 +8094,12 @@ function MediaManagerContent() {
                     <VideoPlayer
                       src={`/api/stream/${playingVideo.id}`}
                       title={playingVideo.title}
+                      baseUrl={
+                        (stats as StatsType)?.baseUrl ??
+                        (typeof window !== 'undefined'
+                          ? window.location.origin
+                          : '')
+                      }
                       channelName={playingVideo.channel?.name ?? undefined}
                       channelId={playingVideo.channel?.id ?? undefined}
                       subscriptionCategoryName={
@@ -8193,116 +8556,168 @@ function MediaManagerContent() {
           }
         }}
       >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Добавить подписку</DialogTitle>
-            <DialogDescription>
-              Введите ссылку на канал для автоматического скачивания новых видео
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>URL канала</Label>
-              <Input
-                placeholder="https://youtube.com/@channel"
-                value={subscriptionUrl}
-                onChange={(e) => setSubscriptionUrl(e.target.value)}
-              />
+        <DialogContent
+          showCloseButton={false}
+          className="max-w-md gap-0 rounded-2xl border-slate-200/80 bg-white p-0 shadow-dialog dark:bg-slate-900 dark:border-slate-700/80"
+        >
+          <div className="flex items-start justify-between border-b border-slate-100 px-6 pt-5 pb-4 dark:border-slate-800">
+            <div>
+              <DialogTitle className="text-base font-semibold text-slate-800 dark:text-slate-200">
+                Добавить подписку
+              </DialogTitle>
+              <DialogDescription className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
+                Введите ссылку на канал для автоматического скачивания новых видео
+              </DialogDescription>
             </div>
-            <div className="space-y-2">
-              <Label>Скачивать видео за последние</Label>
-              <Select
-                value={String(subscriptionDays)}
-                onValueChange={(v) => setSubscriptionDays(Number(v))}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="7">7 дней</SelectItem>
-                  <SelectItem value="14">14 дней</SelectItem>
-                  <SelectItem value="30">30 дней</SelectItem>
-                  <SelectItem value="60">60 дней</SelectItem>
-                  <SelectItem value="90">90 дней</SelectItem>
-                  <SelectItem value="365">1 год</SelectItem>
-                  <SelectItem value="730">2 года</SelectItem>
-                  <SelectItem value="1095">3 года</SelectItem>
-                </SelectContent>
-              </Select>
+            <DialogClose className="absolute top-4 right-4 mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300">
+              <X className="h-4 w-4" />
+            </DialogClose>
+          </div>
+          <div className="space-y-5 px-6 py-5">
+            <div>
+              <Label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-400">
+                Ссылка на канал
+              </Label>
+              <div className="relative flex flex-1">
+                <div className="pointer-events-none absolute inset-y-0 left-3 flex items-center">
+                  <Link2 className="h-4 w-4 text-slate-400" />
+                </div>
+                <Input
+                  placeholder="https://youtube.com/@channel"
+                  value={subscriptionUrl}
+                  onChange={(e) => setSubscriptionUrl(e.target.value)}
+                  className="h-10 rounded-xl border-slate-200 bg-slate-50 pl-9 pr-3 text-sm text-slate-700 focus:border-primary focus:ring-2 focus:ring-primary/20 dark:bg-slate-800/50 dark:border-slate-600 dark:text-slate-200"
+                />
+              </div>
             </div>
-
-            <div className="space-y-2">
-              <Label>Удалять видео через</Label>
-              <Select
-                value={String(subscriptionAutoDeleteDays)}
-                onValueChange={(v) => setSubscriptionAutoDeleteDays(Number(v))}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="0">Не удалять</SelectItem>
-                  <SelectItem value="7">7 дней</SelectItem>
-                  <SelectItem value="14">14 дней</SelectItem>
-                  <SelectItem value="30">30 дней</SelectItem>
-                  <SelectItem value="60">60 дней</SelectItem>
-                  <SelectItem value="90">90 дней</SelectItem>
-                  <SelectItem value="365">1 год</SelectItem>
-                  <SelectItem value="730">2 года</SelectItem>
-                  <SelectItem value="1095">3 года</SelectItem>
-                </SelectContent>
-              </Select>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-400">
+                  Актуальность
+                </Label>
+                <Select
+                  value={String(subscriptionDays)}
+                  onValueChange={(v) => setSubscriptionDays(Number(v))}
+                >
+                  <SelectTrigger className="h-10 w-full rounded-xl border-slate-200 bg-slate-50 py-2.5 pl-3 pr-8 text-sm text-slate-700 focus:ring-2 focus:ring-primary/20 dark:bg-slate-800/50 dark:border-slate-600 dark:text-slate-200">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="7">7 дней</SelectItem>
+                    <SelectItem value="14">14 дней</SelectItem>
+                    <SelectItem value="30">30 дней</SelectItem>
+                    <SelectItem value="60">60 дней</SelectItem>
+                    <SelectItem value="90">90 дней</SelectItem>
+                    <SelectItem value="365">1 год</SelectItem>
+                    <SelectItem value="730">2 года</SelectItem>
+                    <SelectItem value="1095">3 года</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-400">
+                  Удалять через
+                </Label>
+                <Select
+                  value={String(subscriptionAutoDeleteDays)}
+                  onValueChange={(v) => setSubscriptionAutoDeleteDays(Number(v))}
+                >
+                  <SelectTrigger className="h-10 w-full rounded-xl border-slate-200 bg-slate-50 py-2.5 pl-3 pr-8 text-sm text-slate-700 focus:ring-2 focus:ring-primary/20 dark:bg-slate-800/50 dark:border-slate-600 dark:text-slate-200">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="0">Не удалять</SelectItem>
+                    <SelectItem value="7">7 дней</SelectItem>
+                    <SelectItem value="14">14 дней</SelectItem>
+                    <SelectItem value="30">30 дней</SelectItem>
+                    <SelectItem value="60">60 дней</SelectItem>
+                    <SelectItem value="90">90 дней</SelectItem>
+                    <SelectItem value="365">1 год</SelectItem>
+                    <SelectItem value="730">2 года</SelectItem>
+                    <SelectItem value="1095">3 года</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
-
-            <div className="space-y-2">
-              <Label>Качество видео</Label>
-              <Select
-                value={subscriptionQuality}
-                onValueChange={setSubscriptionQuality}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="best">Лучшее</SelectItem>
-                  <SelectItem value="1080">1080p</SelectItem>
-                  <SelectItem value="720">720p</SelectItem>
-                  <SelectItem value="480">480p</SelectItem>
-                </SelectContent>
-              </Select>
+            <div>
+              <Label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-400">
+                Качество видео
+              </Label>
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { value: "best", label: "Лучшее" },
+                  { value: "1080", label: "1080p" },
+                  { value: "720", label: "720p" },
+                  { value: "480", label: "480p" },
+                ].map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setSubscriptionQuality(opt.value)}
+                    className={cn(
+                      "select-none rounded-lg border px-3 py-1.5 text-sm transition-all",
+                      subscriptionQuality === opt.value
+                        ? "border-primary bg-primary/10 font-semibold text-primary dark:bg-primary/20"
+                        : "cursor-pointer border-slate-200 bg-slate-50 text-slate-600 hover:border-primary/50 dark:border-slate-600 dark:bg-slate-800/50 dark:text-slate-400 dark:hover:border-primary/50",
+                    )}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label>Категория</Label>
-              <Select
-                value={newSubscriptionCategoryId ?? "__none__"}
-                onValueChange={(v) =>
-                  setNewSubscriptionCategoryId(v === "__none__" ? null : v)
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Без категории" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__">Без категории</SelectItem>
-                  {subscriptionCategories?.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      <span className="flex items-center gap-2">
-                        <span
-                          className="inline-block w-3 h-3 rounded-full shrink-0"
-                          style={{ backgroundColor: c.backgroundColor }}
-                        />
+            <div>
+              <Label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-400">
+                Категория
+              </Label>
+              <div className="relative">
+                {newSubscriptionCategoryId &&
+                subscriptionCategories?.find(
+                  (c) => c.id === newSubscriptionCategoryId,
+                ) ? (
+                  <div className="pointer-events-none absolute inset-y-0 left-3 z-10 flex items-center">
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{
+                        backgroundColor:
+                          subscriptionCategories.find(
+                            (c) => c.id === newSubscriptionCategoryId,
+                          )?.backgroundColor ?? "#f59e0b",
+                      }}
+                    />
+                  </div>
+                ) : null}
+                <Select
+                  value={newSubscriptionCategoryId ?? "__none__"}
+                  onValueChange={(v) =>
+                    setNewSubscriptionCategoryId(v === "__none__" ? null : v)
+                  }
+                >
+                  <SelectTrigger
+                    className={cn(
+                      "h-10 w-full rounded-xl border-slate-200 bg-slate-50 py-2.5 pr-8 text-sm text-slate-700 focus:ring-2 focus:ring-primary/20 dark:bg-slate-800/50 dark:border-slate-600 dark:text-slate-200",
+                      newSubscriptionCategoryId ? "pl-8" : "pl-3",
+                    )}
+                  >
+                    <SelectValue placeholder="— Без категории —" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">— Без категории —</SelectItem>
+                    {subscriptionCategories?.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
                         {c.name}
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           </div>
-          <DialogFooter>
+          <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/60 px-6 py-4 dark:border-slate-800 dark:bg-slate-800/30">
             <Button
-              variant="outline"
+              variant="ghost"
               onClick={() => setSubscriptionDialogOpen(false)}
+              className="rounded-xl px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 dark:text-slate-400 dark:hover:bg-slate-700"
             >
               Отмена
             </Button>
@@ -8323,13 +8738,14 @@ function MediaManagerContent() {
                 subscriptionMutation.mutate();
               }}
               disabled={!subscriptionUrl || subscriptionMutation.isPending}
+              className="rounded-xl px-5 py-2 text-sm font-semibold shadow-sm"
             >
               {subscriptionMutation.isPending && (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               )}
               Подписаться
             </Button>
-          </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
 
@@ -8338,14 +8754,27 @@ function MediaManagerContent() {
         open={!!editSubscriptionId}
         onOpenChange={(open) => !open && setEditSubscriptionId(null)}
       >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Редактировать подписку</DialogTitle>
-            <DialogDescription>
-              Измените параметры скачивания для этой подписки
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
+        <DialogContent
+          showCloseButton={false}
+          className="max-w-md gap-0 rounded-2xl border-slate-200/80 bg-white p-0 shadow-dialog dark:bg-slate-900 dark:border-slate-700/80"
+        >
+          <div className="flex items-start justify-between border-b border-slate-100 px-6 pt-5 pb-4 dark:border-slate-800">
+            <div>
+              <DialogTitle className="text-base font-semibold text-slate-800 dark:text-slate-200">
+                Редактировать подписку
+              </DialogTitle>
+              <DialogDescription className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
+                Параметры загрузки для этой подписки
+              </DialogDescription>
+            </div>
+            <DialogClose
+              onClick={() => setEditSubscriptionId(null)}
+              className="absolute top-4 right-4 mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+            >
+              <X className="h-4 w-4" />
+            </DialogClose>
+          </div>
+          <div className="space-y-5 px-6 py-5">
             {(() => {
               const editSub = editSubscriptionId
                 ? subscriptions?.find(
@@ -8356,19 +8785,27 @@ function MediaManagerContent() {
                 ? `https://www.youtube.com/channel/${editSub.channel.platformId}`
                 : "";
               return channelUrl ? (
-                <div className="space-y-2">
-                  <Label>Ссылка на канал</Label>
-                  <div className="flex gap-2 items-center">
-                    <Input
-                      readOnly
-                      value={channelUrl}
-                      className="font-mono text-sm bg-muted"
-                    />
+                <div>
+                  <Label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-400">
+                    Ссылка на канал
+                  </Label>
+                  <div className="flex gap-2">
+                    <div className="relative flex flex-1">
+                      <div className="pointer-events-none absolute inset-y-0 left-3 flex items-center">
+                        <Link2 className="h-4 w-4 text-slate-400" />
+                      </div>
+                      <Input
+                        readOnly
+                        value={channelUrl}
+                        className="h-10 rounded-xl border-slate-200 bg-slate-50 pl-9 pr-3 font-mono text-sm text-slate-700 dark:bg-slate-800/50 dark:border-slate-600 dark:text-slate-200"
+                      />
+                    </div>
                     <Button
                       type="button"
-                      variant="outline"
+                      variant="ghost"
                       size="icon"
                       title="Копировать"
+                      className="h-10 w-10 shrink-0 rounded-xl bg-slate-100 text-slate-500 transition-colors hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700"
                       onClick={() => {
                         navigator.clipboard.writeText(channelUrl);
                         toast.success("Ссылка скопирована");
@@ -8380,100 +8817,151 @@ function MediaManagerContent() {
                 </div>
               ) : null;
             })()}
-            <div className="space-y-2">
-              <Label>Дней истории</Label>
-              <Select
-                value={String(editSubscriptionDays)}
-                onValueChange={(v) => setEditSubscriptionDays(Number(v))}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="7">7 дней</SelectItem>
-                  <SelectItem value="14">14 дней</SelectItem>
-                  <SelectItem value="30">30 дней</SelectItem>
-                  <SelectItem value="60">60 дней</SelectItem>
-                  <SelectItem value="90">90 дней</SelectItem>
-                  <SelectItem value="365">1 год</SelectItem>
-                  <SelectItem value="730">2 года</SelectItem>
-                  <SelectItem value="1095">3 года</SelectItem>
-                </SelectContent>
-              </Select>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-400">
+                  Актуальность
+                </Label>
+                <Select
+                  value={String(editSubscriptionDays)}
+                  onValueChange={(v) => setEditSubscriptionDays(Number(v))}
+                >
+                  <SelectTrigger className="h-10 w-full rounded-xl border-slate-200 bg-slate-50 py-2.5 pl-3 pr-8 text-sm text-slate-700 focus:ring-2 focus:ring-primary/20 dark:bg-slate-800/50 dark:border-slate-600 dark:text-slate-200">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="7">7 дней</SelectItem>
+                    <SelectItem value="14">14 дней</SelectItem>
+                    <SelectItem value="30">30 дней</SelectItem>
+                    <SelectItem value="60">60 дней</SelectItem>
+                    <SelectItem value="90">90 дней</SelectItem>
+                    <SelectItem value="365">1 год</SelectItem>
+                    <SelectItem value="730">2 года</SelectItem>
+                    <SelectItem value="1095">3 года</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-400">
+                  Удалять через
+                </Label>
+                <Select
+                  value={String(editSubscriptionAutoDeleteDays)}
+                  onValueChange={(v) =>
+                    setEditSubscriptionAutoDeleteDays(Number(v))
+                  }
+                >
+                  <SelectTrigger className="h-10 w-full rounded-xl border-slate-200 bg-slate-50 py-2.5 pl-3 pr-8 text-sm text-slate-700 focus:ring-2 focus:ring-primary/20 dark:bg-slate-800/50 dark:border-slate-600 dark:text-slate-200">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="0">Не удалять</SelectItem>
+                    <SelectItem value="7">7 дней</SelectItem>
+                    <SelectItem value="14">14 дней</SelectItem>
+                    <SelectItem value="30">30 дней</SelectItem>
+                    <SelectItem value="60">60 дней</SelectItem>
+                    <SelectItem value="90">90 дней</SelectItem>
+                    <SelectItem value="365">1 год</SelectItem>
+                    <SelectItem value="730">2 года</SelectItem>
+                    <SelectItem value="1095">3 года</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label>Удалять видео через</Label>
-              <Select
-                value={String(editSubscriptionAutoDeleteDays)}
-                onValueChange={(v) =>
-                  setEditSubscriptionAutoDeleteDays(Number(v))
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="0">Не удалять</SelectItem>
-                  <SelectItem value="7">7 дней</SelectItem>
-                  <SelectItem value="14">14 дней</SelectItem>
-                  <SelectItem value="30">30 дней</SelectItem>
-                  <SelectItem value="60">60 дней</SelectItem>
-                  <SelectItem value="90">90 дней</SelectItem>
-                  <SelectItem value="365">1 год</SelectItem>
-                  <SelectItem value="730">2 года</SelectItem>
-                  <SelectItem value="1095">3 года</SelectItem>
-                </SelectContent>
-              </Select>
+            <div>
+              <Label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-400">
+                Качество видео
+              </Label>
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { value: "best", label: "Лучшее" },
+                  { value: "1080", label: "1080p" },
+                  { value: "720", label: "720p" },
+                  { value: "480", label: "480p" },
+                ].map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setEditSubscriptionQuality(opt.value)}
+                    className={cn(
+                      "select-none rounded-lg border px-3 py-1.5 text-sm transition-all",
+                      editSubscriptionQuality === opt.value
+                        ? "border-primary bg-primary/10 font-semibold text-primary dark:bg-primary/20"
+                        : "cursor-pointer border-slate-200 bg-slate-50 text-slate-600 hover:border-primary/50 dark:border-slate-600 dark:bg-slate-800/50 dark:text-slate-400 dark:hover:border-primary/50",
+                    )}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label>Качество видео</Label>
-              <Select
-                value={editSubscriptionQuality}
-                onValueChange={setEditSubscriptionQuality}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="best">Лучшее</SelectItem>
-                  <SelectItem value="1080">1080p</SelectItem>
-                  <SelectItem value="720">720p</SelectItem>
-                  <SelectItem value="480">480p</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>Категория</Label>
-              <Select
-                value={editSubscriptionCategoryId ?? "__none__"}
-                onValueChange={(v) =>
-                  setEditSubscriptionCategoryId(v === "__none__" ? null : v)
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Без категории" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__">Без категории</SelectItem>
-                  {subscriptionCategories?.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      <span className="flex items-center gap-2">
-                        <span
-                          className="inline-block w-3 h-3 rounded-full shrink-0"
-                          style={{ backgroundColor: c.backgroundColor }}
-                        />
+            <div>
+              <Label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-400">
+                Категория
+              </Label>
+              <div className="relative">
+                {editSubscriptionCategoryId &&
+                subscriptionCategories?.find(
+                  (c) => c.id === editSubscriptionCategoryId,
+                ) ? (
+                  <div className="pointer-events-none absolute inset-y-0 left-3 z-10 flex items-center">
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{
+                        backgroundColor:
+                          subscriptionCategories.find(
+                            (c) => c.id === editSubscriptionCategoryId,
+                          )?.backgroundColor ?? "#f59e0b",
+                      }}
+                    />
+                  </div>
+                ) : null}
+                <Select
+                  value={editSubscriptionCategoryId ?? "__none__"}
+                  onValueChange={(v) =>
+                    setEditSubscriptionCategoryId(v === "__none__" ? null : v)
+                  }
+                >
+                  <SelectTrigger
+                    className={cn(
+                      "h-10 w-full rounded-xl border-slate-200 bg-slate-50 py-2.5 pr-8 text-sm text-slate-700 focus:ring-2 focus:ring-primary/20 dark:bg-slate-800/50 dark:border-slate-600 dark:text-slate-200",
+                      editSubscriptionCategoryId ? "pl-8" : "pl-3",
+                    )}
+                  >
+                    <SelectValue placeholder="— Без категории —" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">— Без категории —</SelectItem>
+                    {subscriptionCategories?.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
                         {c.name}
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-600 dark:bg-slate-800/50">
+              <div>
+                <p className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                  Публичная подписка
+                </p>
+                <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
+                  Другие пользователи смогут добавить её себе
+                </p>
+              </div>
+              <Switch
+                id="edit-sub-public"
+                checked={editSubscriptionIsPublic}
+                onCheckedChange={setEditSubscriptionIsPublic}
+              />
             </div>
           </div>
-          <DialogFooter>
+          <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/60 px-6 py-4 dark:border-slate-800 dark:bg-slate-800/30">
             <Button
-              variant="outline"
+              variant="ghost"
               onClick={() => setEditSubscriptionId(null)}
+              className="rounded-xl px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 dark:text-slate-400 dark:hover:bg-slate-700"
             >
               Отмена
             </Button>
@@ -8494,13 +8982,14 @@ function MediaManagerContent() {
                 updateSubscriptionMutation.mutate();
               }}
               disabled={updateSubscriptionMutation.isPending}
+              className="rounded-xl px-5 py-2 text-sm font-semibold shadow-sm"
             >
               {updateSubscriptionMutation.isPending && (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               )}
               Сохранить
             </Button>
-          </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
 

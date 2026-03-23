@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
-import { Play, Video, Star, Trash2, Download, ExternalLink, Share2, Eye, ListPlus, Plus, X, MoreVertical, Tag, MessageCircle, Link2, Pin, Music2, Loader2 } from 'lucide-react';
+import { Play, Video, Star, Trash2, Download, ExternalLink, Share2, Eye, ListPlus, Plus, X, MoreVertical, Tag, MessageCircle, Link2, Pin, Music2, Loader2, Cast } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -20,6 +20,7 @@ import {
 import { cn } from '@/lib/utils';
 import { withAudioDownloadSlot } from '@/lib/client-audio-download-queue';
 import { fetchAndSavePreparedAudio } from '@/lib/prepared-audio-download';
+import { useChromecast } from '@/lib/use-chromecast';
 
 function buildWatchUrl(baseUrl: string, videoId: string): string {
   return `${baseUrl.replace(/\/$/, '')}/watch/${videoId}`;
@@ -207,6 +208,7 @@ export function VideoCard<T extends VideoCardVideo>({
   const [favoriteOverride, setFavoriteOverride] = useState<boolean | null>(null);
   const [bookmarkedOverride, setBookmarkedOverride] = useState<boolean | null>(null);
   const [audioDownloadBusy, setAudioDownloadBusy] = useState(false);
+  const chromecast = useChromecast();
   const thumbnailSrc =
     (video.filePath || video.thumbnailUrl) ? `/api/thumbnail/${video.id}` : null;
 
@@ -457,7 +459,7 @@ export function VideoCard<T extends VideoCardVideo>({
               >
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger>
-                    <Tag className="h-4 w-4 mr-2 shrink-0" />
+                    <Tag className="h-4 w-4 shrink-0" />
                     Атрибуты
                   </DropdownMenuSubTrigger>
                   <DropdownMenuSubContent>
@@ -522,10 +524,34 @@ export function VideoCard<T extends VideoCardVideo>({
                   </DropdownMenuSubContent>
                 </DropdownMenuSub>
                 <DropdownMenuSeparator />
+                {chromecast.isAvailable && shareBaseUrl && (
+                  <DropdownMenuItem
+                    onClick={async () => {
+                      setContextMenuOpen(false);
+                      const origin = shareBaseUrl.replace(/\/$/, '');
+                      const streamUrl = `${origin}/api/stream/${video.id}`;
+                      const posterUrl = thumbnailSrc
+                        ? `${origin}${thumbnailSrc}`
+                        : undefined;
+                      try {
+                        await chromecast.castMedia({
+                          contentId: streamUrl,
+                          title: video.title,
+                          posterUrl,
+                        });
+                      } catch {
+                        toast.error('Не удалось передать на Chromecast');
+                      }
+                    }}
+                  >
+                    <Cast className="h-4 w-4 shrink-0" />
+                    Транслировать
+                  </DropdownMenuItem>
+                )}
                 {shareBaseUrl && (
                   <DropdownMenuSub>
                     <DropdownMenuSubTrigger>
-                      <Share2 className="h-4 w-4 mr-2 shrink-0" />
+                      <Share2 className="h-4 w-4 shrink-0" />
                       Поделиться
                     </DropdownMenuSubTrigger>
                     <DropdownMenuSubContent>
@@ -535,7 +561,7 @@ export function VideoCard<T extends VideoCardVideo>({
                           openTelegramShare(buildWatchUrl(shareBaseUrl, video.id), video.title);
                         }}
                       >
-                        <MessageCircle className="h-4 w-4 mr-2 shrink-0" />
+                        <MessageCircle className="h-4 w-4 shrink-0" />
                         В Telegram
                       </DropdownMenuItem>
                       <DropdownMenuItem
@@ -544,7 +570,7 @@ export function VideoCard<T extends VideoCardVideo>({
                           copyToClipboard(buildWatchUrl(shareBaseUrl, video.id));
                         }}
                       >
-                        <Link2 className="h-4 w-4 mr-2 shrink-0" />
+                        <Link2 className="h-4 w-4 shrink-0" />
                         Скопировать ссылку
                       </DropdownMenuItem>
                     </DropdownMenuSubContent>
@@ -553,7 +579,7 @@ export function VideoCard<T extends VideoCardVideo>({
                 {video.filePath && (
                   <DropdownMenuSub>
                     <DropdownMenuSubTrigger>
-                      <Download className="h-4 w-4 mr-2 shrink-0" />
+                      <Download className="h-4 w-4 shrink-0" />
                       Скачать
                     </DropdownMenuSubTrigger>
                     <DropdownMenuSubContent>
@@ -564,7 +590,7 @@ export function VideoCard<T extends VideoCardVideo>({
                           rel="noopener noreferrer"
                           onClick={() => setContextMenuOpen(false)}
                         >
-                          <Video className="h-4 w-4 mr-2 shrink-0" />
+                          <Video className="h-4 w-4 shrink-0" />
                           Видео
                         </a>
                       </DropdownMenuItem>
@@ -581,9 +607,9 @@ export function VideoCard<T extends VideoCardVideo>({
                         }}
                       >
                         {audioDownloadBusy ? (
-                          <Loader2 className="h-4 w-4 mr-2 shrink-0 animate-spin" />
+                          <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
                         ) : (
-                          <Music2 className="h-4 w-4 mr-2 shrink-0" />
+                          <Music2 className="h-4 w-4 shrink-0" />
                         )}
                         Аудио
                       </DropdownMenuItem>
@@ -598,7 +624,7 @@ export function VideoCard<T extends VideoCardVideo>({
                       rel="noopener noreferrer"
                       onClick={() => setContextMenuOpen(false)}
                     >
-                      <ExternalLink className="h-4 w-4 mr-2 shrink-0" />
+                      <ExternalLink className="h-4 w-4 shrink-0" />
                       Открыть на Youtube
                     </a>
                   </DropdownMenuItem>
@@ -613,7 +639,7 @@ export function VideoCard<T extends VideoCardVideo>({
                         onDelete(video.id);
                       }}
                     >
-                      <Trash2 className="h-4 w-4 mr-2 shrink-0" />
+                      <Trash2 className="h-4 w-4 shrink-0" />
                       Удалить
                     </DropdownMenuItem>
                   </>

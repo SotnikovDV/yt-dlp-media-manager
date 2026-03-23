@@ -76,12 +76,15 @@ export default async function WatchPage({
       getDownloadPathAsync
     );
 
+    const baseUrl = env.baseUrl();
+
     return (
       <div className="min-h-screen bg-black flex flex-col items-center justify-center p-4">
         <div className="w-full max-w-5xl aspect-video bg-black py-8 relative">
           <VideoPlayer
             src={`/api/stream/${resolved.id}`}
             title={resolved.title}
+            baseUrl={baseUrl}
             channelName={resolved.channel?.name ?? undefined}
             channelId={resolved.channel?.id ?? undefined}
             publishedAt={resolved.publishedAt ?? undefined}

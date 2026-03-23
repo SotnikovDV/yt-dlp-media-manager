@@ -383,13 +383,14 @@ async function tick() {
           const cutoff = new Date();
           cutoff.setDate(cutoff.getDate() - task.subscription.downloadDays);
           if (video.publishedAt < cutoff) {
+            const reason = `Видео старше допустимого периода загрузки подписки (${task.subscription.downloadDays} дн.)`;
             await db.downloadTask.update({
               where: { id: task.id },
               data: {
                 status: 'rejected',
                 progress: 100,
                 completedAt: new Date(),
-                errorMsg: null,
+                errorMsg: reason,
               },
             });
             if (video.platformId) {

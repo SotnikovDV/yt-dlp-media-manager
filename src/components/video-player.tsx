@@ -24,6 +24,7 @@ import {
   ExternalLink,
   Video as VideoIcon,
   Music2,
+  Cast,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
@@ -37,6 +38,8 @@ import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { ShareVideoMenu } from '@/components/share-video-menu';
 import { useGlobalPlayerActions } from '@/lib/player-store';
+import { useChromecast } from '@/lib/use-chromecast';
+import { toast } from 'sonner';
 import { withAudioDownloadSlot } from '@/lib/client-audio-download-queue';
 import { fetchAndSavePreparedAudio } from '@/lib/prepared-audio-download';
 
@@ -453,6 +456,8 @@ export interface VideoPlayerProps {
   youtubeUrl?: string | null;
   /** Действия (избранное/закрепить/не очищать/поделиться/скачать) в панели (i) */
   descriptionActions?: VideoPlayerDescriptionActions;
+  /** Базовый URL для построения абсолютных ссылок (стрим, постер) — нужен для Chromecast */
+  baseUrl?: string;
 }
 
 export function VideoPlayer({
@@ -479,6 +484,7 @@ export function VideoPlayer({
   description,
   youtubeUrl,
   descriptionActions,
+  baseUrl,
 }: VideoPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -521,6 +527,7 @@ export function VideoPlayer({
   const holdTouchIdRef = useRef<number | null>(null);
   const isAndroidChromeRef = useRef<boolean | null>(null);
   const { setTrack, setMode, setWasFullscreenBeforeMiniplayer } = useGlobalPlayerActions();
+  const chromecast = useChromecast();
   const autoPlayOnceRef = useRef(false);
   const initialFullscreenAppliedRef = useRef(false);
 
@@ -1452,6 +1459,42 @@ export function VideoPlayer({
           >
             <PictureInPicture2 className="h-5 w-5" />
           </Button>
+
+          {/* Chromecast — трансляция на ТВ */}
+          {chromecast.isAvailable && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-9 w-9 text-white hover:bg-white/20 shrink-0"
+              onClick={async (e) => {
+                e.stopPropagation();
+                const origin = (
+                  baseUrl ??
+                  (typeof window !== 'undefined' ? window.location.origin : '')
+                ).replace(/\/$/, '');
+                const streamUrl =
+                  src.startsWith('http') ? src : `${origin}${src.startsWith('/') ? '' : '/'}${src}`;
+                const posterUrl =
+                  poster && !poster.startsWith('http')
+                    ? `${origin}${poster.startsWith('/') ? '' : '/'}${poster}`
+                    : poster;
+                try {
+                  await chromecast.castMedia({
+                    contentId: streamUrl,
+                    title,
+                    posterUrl: posterUrl || undefined,
+                    currentTime: currentTime > 0 ? currentTime : undefined,
+                  });
+                } catch {
+                  toast.error('Не удалось передать на Chromecast');
+                }
+              }}
+              aria-label="Трансляция на Chromecast"
+              title="Трансляция на Chromecast"
+            >
+              <Cast className="h-5 w-5" />
+            </Button>
+          )}
 
           {/* Полноэкранный режим */}
           <Button
