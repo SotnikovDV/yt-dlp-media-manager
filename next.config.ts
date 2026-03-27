@@ -4,6 +4,12 @@ const nextConfig: NextConfig = {
   output: "standalone",
   /* config options here */
   reactStrictMode: true,
+  async rewrites() {
+    return [
+      { source: "/help", destination: "/help/index.html" },
+      { source: "/help/", destination: "/help/index.html" },
+    ];
+  },
   // Исключаем из standalone-трассировки: папка с загрузками (DOWNLOAD_PATH) и data — не часть приложения.
   // data/tools (yt-dlp.exe, ffmpeg) не должны попадать в standalone, иначе при следующей сборке
   // Next пытается удалить старый вывод и на Windows получает EPERM (файл заблокирован).

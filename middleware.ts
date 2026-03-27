@@ -11,6 +11,8 @@ const PUBLIC_PATHS = [
   '/api/thumbnail',
   '/playlist/shared',
   '/api/playlists/public',
+  /** Telegram webhook для пользовательского бота (/id, /start); защита секретом в route */
+  '/api/telegram/user-bot-webhook',
 ];
 
 const PENDING_ALLOWED_PATHS = [
@@ -18,10 +20,20 @@ const PENDING_ALLOWED_PATHS = [
   '/profile',
   '/api/profile',
   '/api/avatar',
+  '/api/telegram/user-bot-webhook-info',
+  '/api/telegram/user-bot-webhook-last-update',
+  '/api/telegram/user-bot-set-webhook',
 ];
 
 function isPublicPath(pathname: string) {
-  return PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + '/') || pathname.startsWith(p));
+  if (pathname.startsWith('/api/telegram/user-bot-hook/')) return true;
+  /** Статическая справка — доступна без входа (ссылки со страниц логина/регистрации). */
+  if (pathname === '/help' || pathname.startsWith('/help/')) return true;
+  return PUBLIC_PATHS.some((p) => {
+    // Только точный путь webhook (после normalize — и с `/` в конце у клиента)
+    if (p === '/api/telegram/user-bot-webhook') return pathname === p;
+    return pathname === p || pathname.startsWith(`${p}/`) || pathname.startsWith(p);
+  });
 }
 
 function isPendingAllowed(pathname: string) {
@@ -32,8 +44,14 @@ function isAdminPath(pathname: string) {
   return pathname === '/admin' || pathname.startsWith('/admin/') || pathname.startsWith('/api/admin');
 }
 
+/** Убираем завершающий `/` для сопоставления с PUBLIC_PATHS (кроме корня `/`). */
+function normalizePathname(pathname: string): string {
+  if (pathname !== '/' && pathname.endsWith('/')) return pathname.slice(0, -1);
+  return pathname;
+}
+
 export async function middleware(req: NextRequest) {
-  const { pathname } = req.nextUrl;
+  const pathname = normalizePathname(req.nextUrl.pathname);
 
   // Next internals / static
   if (pathname.startsWith('/_next') || pathname.startsWith('/favicon.ico')) {
@@ -74,7 +92,13 @@ export async function middleware(req: NextRequest) {
   return NextResponse.next();
 }
 
+/**
+ * Webhook Telegram не проходим через middleware: у Next.js были кейсы, когда наличие middleware
+ * задерживало/ломало обработку POST с телом; Telegram тогда получает «Read timeout expired».
+ */
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
+  matcher: [
+    '/((?!_next/static|_next/image|favicon.ico|api/telegram/user-bot-hook/|api/telegram/user-bot-webhook$).*)',
+  ],
 };
 

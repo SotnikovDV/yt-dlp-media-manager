@@ -5,6 +5,16 @@ import { useState, useEffect, useCallback } from 'react';
 const CAST_SDK_URL =
   'https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1';
 
+const DEBUG =
+  typeof process !== 'undefined' &&
+  ['1', 'true', 'yes', 'on'].includes(
+    process.env?.NEXT_PUBLIC_CHROMECAST_DEBUG?.toLowerCase?.() ?? ''
+  );
+
+function log(...args: unknown[]) {
+  if (DEBUG) console.log('[Chromecast]', ...args);
+}
+
 export interface CastMediaParams {
   contentId: string;
   contentType?: 'video/mp4' | 'video/webm' | 'video/x-matroska';
@@ -21,7 +31,9 @@ export function useChromecast() {
     if (typeof window === 'undefined') return;
 
     const init = (available: boolean) => {
+      log('SDK onGCastApiAvailable:', available);
       if (!available) {
+        log('Cast SDK недоступен (расширение/браузер не поддерживает)');
         setIsAvailable(false);
         setIsInitialized(true);
         return;
@@ -30,6 +42,7 @@ export function useChromecast() {
         const cast = (window as Window & { cast?: { framework: { CastContext: { getInstance: () => { setOptions: (o: unknown) => void } } } } }).cast;
         const chrome = (window as Window & { chrome?: { cast?: { media?: { DEFAULT_MEDIA_RECEIVER_APP_ID: string }; AutoJoinPolicy?: { ORIGIN_SCOPED: string } } } }).chrome;
         if (!cast?.framework?.CastContext || !chrome?.cast?.media?.DEFAULT_MEDIA_RECEIVER_APP_ID) {
+          log('Cast API неполный: cast=', !!cast, 'chrome.cast.media=', !!chrome?.cast?.media);
           setIsAvailable(false);
           setIsInitialized(true);
           return;
@@ -39,8 +52,10 @@ export function useChromecast() {
           receiverApplicationId: chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID,
           autoJoinPolicy: chrome.cast.AutoJoinPolicy?.ORIGIN_SCOPED,
         });
+        log('Cast SDK инициализирован (Default Media Receiver)');
         setIsAvailable(true);
-      } catch {
+      } catch (err) {
+        log('Ошибка инициализации Cast:', err);
         setIsAvailable(false);
       }
       setIsInitialized(true);
@@ -72,27 +87,49 @@ export function useChromecast() {
   }, []);
 
   const requestSession = useCallback((): Promise<unknown> => {
+    log('requestSession...');
     const cast = (window as Window & { cast?: { framework: { CastContext: { getInstance: () => { getCurrentSession: () => unknown; requestSession: () => Promise<unknown> } } } } }).cast;
-    if (!cast?.framework?.CastContext) return Promise.reject(new Error('Cast SDK not loaded'));
+    if (!cast?.framework?.CastContext) {
+      log('requestSession: Cast SDK не загружен');
+      return Promise.reject(new Error('Cast SDK not loaded'));
+    }
     const context = cast.framework.CastContext.getInstance();
     const session = context.getCurrentSession();
-    if (session) return Promise.resolve(session);
+    if (session) {
+      log('requestSession: сессия уже есть');
+      return Promise.resolve(session);
+    }
+    log('requestSession: запрос новой сессии (выбор устройства)');
     return context.requestSession();
   }, []);
 
   const castMedia = useCallback(
     async (params: CastMediaParams): Promise<void> => {
+      log('castMedia вызван:', {
+        contentId: params.contentId,
+        contentType: params.contentType ?? 'video/mp4',
+        title: params.title,
+        posterUrl: params.posterUrl ? '(есть)' : '(нет)',
+        currentTime: params.currentTime,
+      });
       const cast = (window as Window & { cast?: unknown }).cast;
       const chrome = (window as Window & { chrome?: { cast?: { media?: { MediaInfo: new (id: string, type: string) => { contentId: string; contentType: string; streamType?: string; metadata?: { title?: string; images?: { url: string }[] }; duration?: number }; LoadRequest: new (mi: unknown) => { media: unknown; autoplay?: boolean; currentTime?: number }; GenericMediaMetadata: new () => { title?: string; images?: { url: string }[] }; StreamType?: { BUFFERED: string } } } } }).chrome;
-      if (!cast || !chrome?.cast?.media) throw new Error('Cast SDK not loaded');
+      if (!cast || !chrome?.cast?.media) {
+        log('castMedia: Cast SDK не загружен');
+        throw new Error('Cast SDK not loaded');
+      }
 
       const session = await requestSession();
       const sessionObj = session as { loadMedia: (r: unknown) => Promise<unknown> };
-      if (!sessionObj?.loadMedia) throw new Error('No Cast session');
+      if (!sessionObj?.loadMedia) {
+        log('castMedia: нет сессии (loadMedia отсутствует)');
+        throw new Error('No Cast session');
+      }
 
       const { MediaInfo, LoadRequest, GenericMediaMetadata, StreamType } = chrome.cast.media;
       const contentType = params.contentType ?? 'video/mp4';
 
+      log('loadMedia: contentId=', params.contentId, 'contentType=', contentType);
       const mediaInfo = new MediaInfo(params.contentId, contentType);
       mediaInfo.streamType = StreamType?.BUFFERED ?? 'BUFFERED';
 
@@ -115,7 +152,16 @@ export function useChromecast() {
         loadRequest.currentTime = params.currentTime;
       }
 
-      await sessionObj.loadMedia(loadRequest);
+      try {
+        await sessionObj.loadMedia(loadRequest);
+        log('loadMedia успешно отправлен, ожидаем воспроизведения на устройстве');
+      } catch (err) {
+        log('loadMedia ошибка:', err);
+        if (err && typeof err === 'object' && 'code' in err) {
+          log('  код:', (err as { code?: string }).code);
+        }
+        throw err;
+      }
     },
     [requestSession]
   );

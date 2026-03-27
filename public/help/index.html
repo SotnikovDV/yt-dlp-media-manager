@@ -1,0 +1,932 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>DVStream — Руководство пользователя</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+/* ─── Reset & Base ─────────────────────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth;font-size:16px}
+body{font-family:'Source Sans 3',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#fafbff;color:#1e2433;-webkit-font-smoothing:antialiased;line-height:1.6}
+img{max-width:100%;display:block}
+code{font-family:'JetBrains Mono',monospace;font-size:0.85em;background:#eef2ff;color:#3730a3;padding:0.1em 0.35em;border-radius:4px}
+a{color:#3b82f6;text-decoration:none}
+a:hover{text-decoration:underline}
+#hero a{color:inherit}
+
+/* ─── Scrollbar ─────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#d1d5db;border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:#9ca3af}
+
+/* ─── Layout ─────────────────────────────────────────────────────────────────── */
+#app{display:flex;min-height:100vh}
+
+/* ─── Sidebar ────────────────────────────────────────────────────────────────── */
+#sidebar{
+  position:fixed;top:0;left:0;bottom:0;width:256px;
+  background:#111827;color:rgba(255,255,255,.55);
+  display:flex;flex-direction:column;
+  z-index:50;transition:transform .25s ease;
+  overflow:hidden;
+  border-right:1px solid rgba(255,255,255,.1);
+}
+#sidebar-inner{display:flex;flex-direction:column;height:100%;overflow:hidden}
+
+.sidebar-logo{
+  padding:0;
+  border-bottom:1px solid rgba(255,255,255,.1);
+}
+.sidebar-logo-row{
+  display:flex;align-items:center;justify-content:space-between;
+  gap:0.5rem;
+  min-height:56px;
+  padding:0.5rem 0.5rem;
+}
+.sidebar-brand{
+  display:flex;align-items:center;gap:0.5rem;
+  min-width:0;
+  text-decoration:none;
+  color:inherit;
+  flex:1;
+}
+.sidebar-brand:hover .logo-title{opacity:.92}
+.logo-icon{
+  width:28px;height:28px;
+  border-radius:7px;
+  background:#2563eb;
+  display:flex;align-items:center;justify-content:center;
+  flex-shrink:0;
+  box-shadow:0 1px 2px rgba(0,0,0,.15);
+}
+.logo-icon svg{width:14px;height:14px;margin-left:2px;fill:#fff}
+.logo-title{
+  font-size:1.25rem;font-weight:500;letter-spacing:-0.02em;
+  line-height:1.15;white-space:nowrap;
+}
+.logo-dv{color:#60a5fa}
+.logo-stream{color:#fff}
+.sidebar-close-btn{
+  display:none;
+  flex-shrink:0;
+  width:36px;height:36px;
+  align-items:center;justify-content:center;
+  border:none;border-radius:0.5rem;
+  background:transparent;
+  color:rgba(255,255,255,.55);
+  cursor:pointer;
+  padding:0;
+}
+.sidebar-close-btn:hover{background:rgba(255,255,255,.07);color:#fff}
+.sidebar-close-btn svg{width:16px;height:16px}
+@media(max-width:1023px){
+  .sidebar-close-btn{display:flex}
+}
+
+.sidebar-search{padding:12px 16px}
+.search-wrap{position:relative}
+.search-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);width:14px;height:14px;color:rgba(232,236,245,.3);pointer-events:none}
+#search-input{width:100%;padding:8px 32px 8px 32px;font-size:.875rem;font-family:inherit;background:rgba(255,255,255,.06);color:#e8ecf5;border:1px solid rgba(255,255,255,.1);border-radius:8px;outline:none;transition:border-color .15s}
+#search-input::placeholder{color:rgba(232,236,245,.3)}
+#search-input:focus{border-color:rgba(96,165,250,.5)}
+#search-clear{position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;color:rgba(232,236,245,.4);cursor:pointer;padding:2px;display:none;line-height:1}
+#search-clear svg{width:14px;height:14px}
+
+.sidebar-label{font-size:.6rem;font-weight:600;color:rgba(232,236,245,.25);text-transform:uppercase;letter-spacing:.12em;padding:8px 20px 6px}
+#nav-list{flex:1;overflow-y:auto;padding:0 8px 16px}
+.nav-btn{
+  width:100%;display:flex;align-items:center;gap:10px;
+  padding:8px 12px;border-radius:8px;border:none;background:none;
+  color:rgba(232,236,245,.65);font-size:.875rem;font-family:inherit;
+  cursor:pointer;text-align:left;transition:all .15s;margin-bottom:2px;
+  position:relative;
+}
+.nav-btn:hover{background:rgba(255,255,255,.07);color:#e8ecf5}
+.nav-btn.active{background:rgba(255,255,255,.1);color:#93c5fd;font-weight:500}
+.nav-btn.active::before{content:'';position:absolute;left:0;top:6px;bottom:6px;width:3px;border-radius:0 2px 2px 0;background:#93c5fd}
+.nav-btn svg{width:16px;height:16px;flex-shrink:0;opacity:.7}
+.nav-btn.active svg{opacity:1}
+.nav-btn.hidden{display:none}
+
+.sidebar-footer{padding:16px 20px;border-top:1px solid rgba(255,255,255,.07)}
+.sidebar-version{font-size:.65rem;color:rgba(232,236,245,.25);margin-top:6px}
+
+/* ─── Mobile header ─────────────────────────────────────────────────────────── */
+#mobile-header{
+  display:none;position:fixed;top:0;left:0;right:0;height:52px;
+  background:#111827;z-index:40;align-items:center;padding:0 16px;gap:12px;
+  border-bottom:1px solid rgba(255,255,255,.1);
+}
+#mobile-menu-btn{background:none;border:none;color:#e8ecf5;cursor:pointer;padding:4px;display:flex}
+#mobile-menu-btn svg{width:22px;height:22px}
+.mobile-logo{font-size:.95rem;font-weight:600;letter-spacing:-0.02em}
+.mobile-logo .logo-dv{color:#60a5fa}
+.mobile-logo .logo-stream{color:#fff}
+
+/* ─── Overlay ────────────────────────────────────────────────────────────────── */
+#sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:45}
+
+/* ─── Main content ───────────────────────────────────────────────────────────── */
+#main{margin-left:256px;flex:1;min-width:0}
+
+/* ─── Hero (градиентная шапка; при прокрутке — узкая закреплённая полоса) ─── */
+#hero{
+  position:sticky;
+  top:0;
+  z-index:45;
+  overflow:hidden;
+  background:linear-gradient(120deg,#0f2d5e 0%,#1e40af 60%,#1d4ed8 100%);
+  padding:0;
+  transition:box-shadow .22s ease;
+}
+@media(max-width:1023px){
+  #hero{top:52px}
+}
+#hero.hero--compact{
+  box-shadow:0 4px 14px rgba(0,0,0,.18);
+}
+@media (prefers-reduced-motion:reduce){
+  #hero,.hero-inner{transition:none !important}
+}
+.hero-bg-pattern{
+  position:absolute;inset:0;
+  opacity:.05;
+  background-image:repeating-linear-gradient(45deg,#fff 0,#fff 1px,transparent 0,transparent 50%);
+  background-size:12px 12px;
+  pointer-events:none;
+}
+.hero-deco{
+  position:absolute;border-radius:50%;border:1px solid rgba(96,165,250,.35);
+  pointer-events:none;z-index:1;
+}
+.hero-deco--lg{right:-2rem;bottom:-2rem;width:12rem;height:12rem;opacity:.35}
+.hero-deco--sm{right:-1rem;bottom:-1rem;width:8rem;height:8rem;border-color:rgba(147,197,253,.45);opacity:.4}
+.hero-inner{
+  position:relative;z-index:2;
+  display:flex;flex-direction:column;align-items:center;text-align:center;
+  padding:2rem 1.25rem 1.75rem;
+  max-width:40rem;margin:0 auto;
+  transition:padding .22s ease, max-width .22s ease;
+}
+#hero.hero--compact .hero-inner{
+  flex-direction:row;
+  align-items:center;
+  justify-content:flex-start;
+  text-align:left;
+  padding:0.5rem 1rem 0.55rem;
+  max-width:none;
+  width:100%;
+  gap:0.75rem;
+}
+#hero.hero--compact .hero-breadcrumb,
+#hero.hero--compact .hero-desc,
+#hero.hero--compact .hero-pills,
+#hero.hero--compact .hero-bottom-line,
+#hero.hero--compact .hero-deco{
+  display:none !important;
+}
+#hero.hero--compact .hero-bg-pattern{opacity:.07}
+#hero.hero--compact .hero-title-row{
+  margin-bottom:0;
+  flex:1;
+  min-width:0;
+}
+#hero.hero--compact .hero-title-icon{
+  width:2rem;height:2rem;border-radius:0.5rem;
+  margin:0;
+}
+#hero.hero--compact .hero-title-icon svg{width:1rem;height:1rem}
+#hero.hero--compact .hero-title{
+  font-size:0.95rem;
+  line-height:1.2;
+}
+#hero.hero--compact .hero-product{
+  font-size:0.72rem;
+  margin:0.12rem 0 0;
+}
+.hero-breadcrumb{
+  display:flex;align-items:center;justify-content:center;flex-wrap:wrap;
+  gap:0.2rem 0.35rem;
+  font-size:.75rem;font-weight:500;
+  color:rgba(147,197,253,.9);
+  margin-bottom:1rem;
+  list-style:none;padding:0;
+}
+.hero-breadcrumb a{
+  color:#93c5fd;text-decoration:none;
+}
+.hero-breadcrumb a:hover{color:#e0f2fe;text-decoration:underline}
+.hero-bc-home,.hero-bc-chevron{width:12px;height:12px;flex-shrink:0;stroke:currentColor;opacity:.85}
+.hero-bc-chevron{opacity:.65;width:10px;height:10px}
+.hero-bc-current{color:rgba(186,230,253,.88)}
+.hero-title-row{
+  display:flex;align-items:center;gap:0.75rem;margin-bottom:0.75rem;
+}
+.hero-title-icon{
+  width:2.5rem;height:2.5rem;border-radius:0.75rem;
+  background:rgba(255,255,255,.1);
+  border:1px solid rgba(255,255,255,.2);
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;
+  box-shadow:0 1px 0 rgba(255,255,255,.06) inset;
+  color:#fff;
+}
+.hero-title-icon svg{width:1.25rem;height:1.25rem}
+.hero-title-text{text-align:left;min-width:0}
+.hero-title{
+  font-size:1.35rem;font-weight:700;color:#fff;line-height:1.2;margin:0;
+}
+.hero-product{
+  margin:0.15rem 0 0;font-size:1rem;font-weight:600;color:#93c5fd;
+}
+.hero-desc{
+  font-size:.8125rem;color:rgba(191,219,254,.88);line-height:1.65;
+  max-width:28rem;margin:0 0 1rem;
+}
+.hero-pills{
+  display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:0.5rem;
+}
+.hero-pill{
+  padding:0.28rem 0.65rem;border-radius:9999px;
+  background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.12);
+  font-size:.75rem;color:#bfdbfe;
+}
+.hero-bottom-line{
+  height:1px;
+  background:linear-gradient(90deg,transparent,rgba(96,165,250,.55),transparent);
+  opacity:.55;position:relative;z-index:2;
+}
+
+/* ─── Quick nav bar (на мобилке; на desktop скрыт — достаточно sidebar) ───────── */
+#quick-nav{
+  background:#fff;border-bottom:1px solid #e5e7eb;
+  padding:0 48px;overflow-x:auto;white-space:nowrap;
+  position:sticky;
+  top:0;
+  z-index:30;
+}
+@media(max-width:1023px){
+  #quick-nav{
+    top:calc(52px + var(--help-hero-sticky-h, 120px));
+  }
+}
+#quick-nav::-webkit-scrollbar{height:0}
+.qnav-btn{
+  display:inline-block;padding:12px 14px;font-size:.8rem;color:#6b7280;
+  cursor:pointer;border-bottom:2px solid transparent;transition:all .15s;
+  border:none;background:none;font-family:inherit;
+}
+.qnav-btn:hover{color:#3b82f6}
+.qnav-btn.active{color:#3b82f6;border-bottom-color:#3b82f6;font-weight:500}
+
+/* ─── Content area ───────────────────────────────────────────────────────────── */
+#content{max-width:860px;padding:48px 48px 80px;margin:0 auto}
+
+/* ─── Section ────────────────────────────────────────────────────────────────── */
+.doc-section{margin-bottom:64px}
+@media(max-width:1023px){
+  .doc-section{
+    scroll-margin-top:calc(52px + 12px + var(--help-hero-sticky-h, 200px));
+  }
+}
+@media(min-width:1024px){
+  #quick-nav{display:none !important;}
+  .doc-section{
+    scroll-margin-top:calc(8px + var(--help-hero-sticky-h, 200px));
+  }
+}
+.section-header{display:flex;align-items:center;gap:12px;margin-bottom:20px}
+.section-icon{width:40px;height:40px;border-radius:12px;background:rgba(59,130,246,.1);color:#3b82f6;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.section-icon svg{width:20px;height:20px}
+.section-meta{font-size:.7rem;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.08em}
+.section-title{font-size:1.5rem;font-weight:700;color:#1e2433;line-height:1.25}
+.section-divider{border:none;border-top:1px solid rgba(0,0,0,.07);margin-bottom:20px}
+
+/* ─── Typography ─────────────────────────────────────────────────────────────── */
+.doc-p{font-size:.95rem;line-height:1.75;color:rgba(30,36,51,.88);margin-bottom:16px}
+.doc-h3{font-size:1.1rem;font-weight:600;color:#1e2433;margin:32px 0 12px;display:flex;align-items:center;gap:8px}
+.doc-h3::before{content:'';display:inline-block;width:4px;height:20px;border-radius:2px;background:rgba(59,130,246,.5);flex-shrink:0}
+.doc-h4{font-size:1rem;font-weight:600;color:#1e2433;margin:24px 0 8px}
+
+/* ─── List ───────────────────────────────────────────────────────────────────── */
+.doc-list{list-style:none;margin:0 0 16px;padding:0}
+.doc-list li{display:flex;gap:10px;font-size:.95rem;line-height:1.7;color:rgba(30,36,51,.88);margin-bottom:6px}
+.doc-list li::before{content:'';width:6px;height:6px;border-radius:50%;background:#3b82f6;flex-shrink:0;margin-top:8px}
+.doc-steps{counter-reset:step;list-style:none;margin:0 0 16px;padding:0}
+.doc-steps li{display:flex;gap:12px;font-size:.95rem;line-height:1.7;color:rgba(30,36,51,.88);margin-bottom:10px;counter-increment:step}
+.doc-steps li::before{content:counter(step);width:24px;height:24px;border-radius:50%;background:#3b82f6;color:#fff;font-size:.75rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px}
+
+/* ─── Table ──────────────────────────────────────────────────────────────────── */
+.table-wrap{overflow-x:auto;border-radius:10px;border:1px solid #e5e7eb;margin:20px 0}
+table{width:100%;border-collapse:collapse;font-size:.9rem}
+thead th{background:#f1f5f9;font-weight:600;text-align:left;padding:10px 14px;border-bottom:2px solid #e2e8f0;color:#374151;white-space:nowrap}
+tbody td{padding:9px 14px;border-bottom:1px solid #f1f5f9;vertical-align:top;color:rgba(30,36,51,.88)}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:#f8fafc}
+
+/* ─── Image ──────────────────────────────────────────────────────────────────── */
+.doc-figure{margin:24px 0}
+.doc-img{
+  border-radius:10px;border:1px solid #e5e7eb;
+  box-shadow:0 4px 24px rgba(59,130,246,.06);
+  cursor:zoom-in;transition:box-shadow .25s,transform .25s;
+  width:100%;
+}
+.doc-img:hover{box-shadow:0 8px 40px rgba(59,130,246,.12);transform:translateY(-2px)}
+figcaption{font-size:.82rem;color:#9ca3af;margin-top:10px;font-style:italic}
+
+/* ─── Callout ────────────────────────────────────────────────────────────────── */
+.doc-callout{
+  background:#eff6ff;border-left:4px solid #3b82f6;border-radius:0 10px 10px 0;
+  padding:14px 18px;margin:20px 0;font-size:.9rem;color:#1e3a5f;
+}
+.doc-callout strong{color:#1d4ed8}
+
+/* ─── KBD table ──────────────────────────────────────────────────────────────── */
+.kbd-table{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:16px 0}
+.kbd-row{display:flex;align-items:center;gap:12px;padding:10px 14px;background:#fff;border:1px solid #e5e7eb;border-radius:8px}
+kbd{display:inline-block;padding:3px 8px;font-family:'JetBrains Mono',monospace;font-size:.8rem;font-weight:500;color:#374151;background:#f9fafb;border:1px solid #d1d5db;border-bottom-width:2px;border-radius:5px;white-space:nowrap}
+.kbd-action{font-size:.875rem;color:rgba(30,36,51,.8)}
+
+/* ─── Lightbox ───────────────────────────────────────────────────────────────── */
+#lightbox{
+  display:none;position:fixed;inset:0;background:rgba(15,20,50,.88);
+  z-index:200;align-items:center;justify-content:center;cursor:zoom-out;
+  animation:fadeIn .2s ease;
+}
+#lightbox.open{display:flex}
+#lightbox img{max-width:92vw;max-height:90vh;border-radius:10px;box-shadow:0 8px 60px rgba(0,0,0,.5);cursor:default}
+#lightbox-close{position:absolute;top:20px;right:24px;background:rgba(255,255,255,.15);border:none;color:#fff;border-radius:50%;width:36px;height:36px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:1.2rem;transition:background .15s}
+#lightbox-close:hover{background:rgba(255,255,255,.25)}
+
+/* ─── Scroll-to-top ──────────────────────────────────────────────────────────── */
+#scroll-top{
+  position:fixed;bottom:28px;right:28px;width:40px;height:40px;
+  border-radius:50%;background:#3b82f6;color:#fff;border:none;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;
+  box-shadow:0 4px 16px rgba(59,130,246,.35);opacity:0;
+  transition:opacity .25s,transform .25s;transform:translateY(8px);z-index:60;
+}
+#scroll-top.visible{opacity:1;transform:translateY(0)}
+#scroll-top svg{width:18px;height:18px}
+
+/* ─── No results ─────────────────────────────────────────────────────────────── */
+#no-results{display:none;text-align:center;padding:80px 20px;color:#9ca3af}
+#no-results svg{width:48px;height:48px;margin:0 auto 16px;opacity:.3}
+
+/* ─── Animations ─────────────────────────────────────────────────────────────── */
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+
+/* ─── Responsive ─────────────────────────────────────────────────────────────── */
+@media(max-width:1023px){
+  #sidebar{transform:translateX(-100%)}
+  #sidebar.open{transform:translateX(0)}
+  #mobile-header{display:flex}
+  #main{margin-left:0;padding-top:52px}
+  #hero .hero-inner{padding:1.5rem 1rem 1.35rem}
+  .hero-title{font-size:1.25rem}
+  #quick-nav{padding:0 20px}
+  #content{padding:32px 20px 60px}
+  .kbd-table{grid-template-columns:1fr}
+}
+@media(max-width:480px){
+  #hero .hero-inner{padding:1.25rem 0.875rem 1.15rem}
+  #content{padding:24px 16px 48px}
+  #quick-nav{padding:0 12px}
+}
+</style>
+</head>
+<body>
+
+<!-- Mobile header -->
+<div id="mobile-header">
+  <button id="mobile-menu-btn" aria-label="Открыть меню">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+  </button>
+  <span class="mobile-logo"><span class="logo-dv">DV</span><span class="logo-stream">Stream</span></span>
+</div>
+
+<!-- Sidebar overlay -->
+<div id="sidebar-overlay"></div>
+
+<!-- Sidebar -->
+<aside id="sidebar">
+  <div id="sidebar-inner">
+    <div class="sidebar-logo">
+      <div class="sidebar-logo-row">
+        <a class="sidebar-brand" href="/library" title="Медиатека">
+          <div class="logo-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M5 3l14 9-14 9V3z"/></svg>
+          </div>
+          <span class="logo-title"><span class="logo-dv">DV</span><span class="logo-stream">Stream</span></span>
+        </a>
+        <button type="button" id="sidebar-close-btn" class="sidebar-close-btn" aria-label="Закрыть панель">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6-6 6 6 6"/><path d="M3 12h14"/><path d="M21 19V5"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="sidebar-search">
+      <div class="search-wrap">
+        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input id="search-input" type="text" placeholder="Поиск..." autocomplete="off"/>
+        <button id="search-clear" aria-label="Очистить поиск">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="sidebar-label">Содержание</div>
+    <div id="nav-list"></div>
+
+    <div class="sidebar-footer">
+      <div class="sidebar-version">Версия 1.0 — Март 2026</div>
+    </div>
+  </div>
+</aside>
+
+<!-- Main -->
+<main id="main">
+  <div id="hero">
+    <div class="hero-bg-pattern" aria-hidden="true"></div>
+    <div class="hero-deco hero-deco--lg" aria-hidden="true"></div>
+    <div class="hero-deco hero-deco--sm" aria-hidden="true"></div>
+    <div class="hero-inner">
+      <nav class="hero-breadcrumb" aria-label="Хлебные крошки">
+        <svg class="hero-bc-home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+        <a href="/library">DVStream</a>
+        <svg class="hero-bc-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>
+        <a href="/library">Медиатека</a>
+        <svg class="hero-bc-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>
+        <span class="hero-bc-current">Документация</span>
+      </nav>
+      <div class="hero-title-row">
+        <div class="hero-title-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+        </div>
+        <div class="hero-title-text">
+          <h1 class="hero-title">Руководство пользователя</h1>
+          <p class="hero-product">DVStream</p>
+        </div>
+      </div>
+      <p class="hero-desc">Полное руководство по использованию домашнего медиа-центра DVStream — от первого входа до продвинутых функций.</p>
+      <div class="hero-pills">
+        <span class="hero-pill">Версия 1.0</span>
+        <span class="hero-pill">Март 2026</span>
+        <span class="hero-pill">12 разделов</span>
+      </div>
+    </div>
+    <div class="hero-bottom-line" aria-hidden="true"></div>
+  </div>
+
+  <nav id="quick-nav"></nav>
+
+  <div id="content">
+    <div id="no-results">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <p>Ничего не найдено по запросу</p>
+    </div>
+    <div id="sections-container"></div>
+  </div>
+</main>
+
+<!-- Lightbox -->
+<div id="lightbox">
+  <button id="lightbox-close" aria-label="Закрыть">✕</button>
+  <img id="lightbox-img" src="" alt=""/>
+</div>
+
+<!-- Scroll to top -->
+<button id="scroll-top" aria-label="Наверх">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="18 15 12 9 6 15"/></svg>
+</button>
+
+<script>
+// ─── Data ─────────────────────────────────────────────────────────────────────
+const CDN = "/help/images";
+
+const SECTIONS = [
+  {
+    id:"introduction",number:1,title:"Введение",icon:"book",
+    blocks:[
+      {type:"paragraph",text:"<strong>DVStream</strong> (YT-DLP Media Manager) представляет собой домашний медиа-центр, предназначенный для скачивания, хранения и организации видео с YouTube и других платформ. Приложение построено на базе утилиты yt-dlp и предоставляет удобный веб-интерфейс для управления всеми аспектами работы с видеоконтентом."},
+      {type:"paragraph",text:"Основные возможности системы включают ручное и автоматическое скачивание видео, организацию медиатеки с категориями и плейлистами, управление подписками на каналы, встроенный видеоплеер с поддержкой Chromecast, а также систему уведомлений через Telegram."},
+      {type:"paragraph",text:"Приложение ориентировано на пользователей, которые хотят создать собственную коллекцию видеоконтента с возможностью автономного просмотра, не зависящего от доступности исходных платформ."}
+    ]
+  },
+  {
+    id:"auth",number:2,title:"Вход и регистрация",icon:"login",
+    blocks:[
+      {type:"heading",text:"Страница входа",level:3},
+      {type:"paragraph",text:"Для начала работы с DVStream необходимо авторизоваться. Страница входа содержит два поля — <strong>Логин</strong> и <strong>Пароль</strong>, а также кнопку <strong>Войти в систему</strong>. Под формой расположена ссылка для перехода к регистрации нового аккаунта."},
+      {type:"image",src:"01_login_9500b66c.webp",alt:"Страница входа в DVStream",caption:"Рис. 1. Страница входа в систему DVStream. Введите логин и пароль, затем нажмите «Войти в систему»."},
+      {type:"paragraph",text:"После успешной авторизации вы будете перенаправлены на главную страницу — <strong>Медиатеку</strong>. Если учётные данные введены неверно, система отобразит сообщение об ошибке непосредственно на странице входа."},
+      {type:"heading",text:"Регистрация",level:3},
+      {type:"paragraph",text:"Если у вас ещё нет учётной записи, перейдите по ссылке <strong>«Зарегистрироваться»</strong> на странице входа. Форма регистрации содержит следующие поля:"},
+      {type:"table",table:{headers:["Поле","Описание"],rows:[["Имя","Отображаемое имя пользователя в системе"],["Логин","Уникальный идентификатор для входа"],["Пароль","Пароль для защиты аккаунта"],["Подтверждение пароля","Повторный ввод пароля для исключения ошибок"]]}},
+      {type:"image",src:"02_register_f28c031c.webp",alt:"Страница регистрации",caption:"Рис. 2. Форма регистрации нового пользователя."},
+      {type:"paragraph",text:"После регистрации рекомендуется сразу войти в систему и при необходимости обновить данные профиля, включая привязку Telegram для получения уведомлений."}
+    ]
+  },
+  {
+    id:"interface",number:3,title:"Обзор интерфейса",icon:"layout",
+    blocks:[
+      {type:"paragraph",text:"Интерфейс DVStream организован по принципу трёхколоночной компоновки с постоянной боковой панелью навигации слева. Такая структура обеспечивает быстрый доступ ко всем разделам приложения из любой точки интерфейса."},
+      {type:"image",src:"03_library_main_f6192fce.webp",alt:"Главная страница — Медиатека",caption:"Рис. 3. Общий вид интерфейса DVStream: боковая панель слева, рабочая область справа."},
+      {type:"heading",text:"Боковая панель (сайдбар)",level:3},
+      {type:"paragraph",text:"Боковая панель расположена в левой части экрана и содержит несколько функциональных зон:"},
+      {type:"paragraph",text:"<strong>Навигация.</strong> В верхней части сайдбара находятся три основных раздела приложения: <strong>Медиатека</strong>, <strong>Подписки</strong> (с бейджем, показывающим количество активных подписок) и <strong>Очередь</strong>. Активный раздел выделяется цветом."},
+      {type:"paragraph",text:"<strong>Облако тегов.</strong> Под навигацией расположено облако тегов, сформированное на основе ключевых слов из описаний скачанных видео. Нажатие на тег запускает поиск видео по этому ключевому слову."},
+      {type:"paragraph",text:"<strong>Статистика.</strong> В нижней части сайдбара отображается сводная информация о состоянии системы:"},
+      {type:"table",table:{headers:["Показатель","Описание"],rows:[["Видео","Общее количество видео в медиатеке"],["Загрузок","Количество активных загрузок в очереди"],["Размер","Суммарный объём хранимого контента"],["Подписки","Количество активных подписок"],["Обновление","Дата и время последней проверки обновлений"],["Диск","Общий объём доступного дискового пространства"]]}},
+      {type:"paragraph",text:"<strong>Аватар пользователя.</strong> В самом низу сайдбара расположена кнопка с аватаром (или инициалом) текущего пользователя, ведущая на страницу профиля."},
+      {type:"heading",text:"Верхняя панель (хедер)",level:3},
+      {type:"paragraph",text:"Верхняя панель содержит строку поиска и набор кнопок быстрого действия:"},
+      {type:"list",items:["<strong>Поиск видео</strong> — текстовое поле для поиска по названию, описанию, каналу и датам.","<strong>Проверить обновления</strong> — запуск принудительной проверки новых видео по всем подпискам.","<strong>Добавить подписку</strong> — открытие диалога создания новой подписки.","<strong>Скачать видео</strong> — открытие диалога ручного скачивания видео по URL."]},
+      {type:"heading",text:"Индикатор фоновых задач",level:3},
+      {type:"paragraph",text:"Когда в системе выполняются фоновые задачи (подготовка аудио, проверка подписок), заголовок <strong>DVStream</strong> в шапке и сайдбаре начинает пульсировать. Справа от названия отображается число активных задач. При наведении курсора на это число появляется подсказка с детализацией: количество задач в очереди скачивания аудио и количество параллельных проверок подписок."}
+    ]
+  },
+  {
+    id:"library",number:4,title:"Медиатека",icon:"film",
+    blocks:[
+      {type:"paragraph",text:"<strong>Медиатека</strong> является основным экраном приложения, на котором представлены все скачанные видео, организованные по секциям и категориям."},
+      {type:"heading",text:"Структура медиатеки",level:3},
+      {type:"paragraph",text:"Медиатека разделена на три основные секции:"},
+      {type:"paragraph",text:"<strong>Секция «Последние».</strong> Содержит пять фильтров-списков для быстрого доступа к видео по различным критериям:"},
+      {type:"table",table:{headers:["Фильтр","Описание"],rows:[["Опубликованные","Видео, отсортированные по дате публикации на YouTube"],["Скачанные","Видео, отсортированные по дате скачивания в систему"],["Просматриваемые","Видео, которые вы начали смотреть (с сохранённой позицией)"],["Закрепленные","Видео, вручную закреплённые для быстрого доступа"],["Избранное","Видео, отмеченные как избранные"]]}},
+      {type:"paragraph",text:"Каждый фильтр можно развернуть нажатием на его название или свернуть обратно. Справа от названия расположена кнопка <strong>«Открыть подборку»</strong>, которая открывает полный список видео данного фильтра."},
+      {type:"paragraph",text:"<strong>Секция «Категории».</strong> Группирует видео по категориям, которые назначаются при создании подписки на канал. Каждая категория (например, «Политика», «Финансы», «Безопасность») содержит видео со всех каналов, относящихся к данной категории. В конце секции расположен список <strong>«Отдельные видео»</strong> — сюда попадают видео, скачанные вручную по URL, а не через подписку."},
+      {type:"paragraph",text:"<strong>Секция «Плейлисты».</strong> Позволяет создавать пользовательские подборки видео. Кнопка <strong>«Создать плейлист»</strong> открывает диалог создания нового плейлиста."},
+      {type:"heading",text:"Карточка видео",level:3},
+      {type:"paragraph",text:"Каждое видео в медиатеке представлено карточкой, содержащей превью-изображение с наложенной длительностью, название видео, имя канала, размер файла и дату публикации."},
+      {type:"image",src:"04_library_cards_0cb606e1.webp",alt:"Карточки видео в медиатеке",caption:"Рис. 4. Карточки видео в категории «Политика». На каждой карточке: превью с длительностью, название, канал, размер, дата публикации и кнопки действий."},
+      {type:"paragraph",text:"Кнопки действий на карточке:"},
+      {type:"table",table:{headers:["Кнопка","Расположение","Описание"],rows:[["Закрепить","Левый верхний угол превью","Добавить видео в список «Закреплённые»"],["Добавить в плейлист","Рядом с кнопкой закрепления","Включить видео в существующий или новый плейлист"],["В избранное","Под названием видео","Пометить видео как избранное"],["Смотреть","Основная кнопка","Открыть видео во встроенном плеере"],["Действия","Кнопка с тремя точками","Открыть контекстное меню дополнительных действий"]]}},
+      {type:"heading",text:"Контекстное меню видео",level:3},
+      {type:"paragraph",text:"Нажатие на кнопку <strong>«Действия»</strong> (три точки) на карточке видео открывает контекстное меню со следующими пунктами:"},
+      {type:"image",src:"06_context_menu_da4416fe.webp",alt:"Контекстное меню карточки видео",caption:"Рис. 5. Контекстное меню с дополнительными действиями для видео."},
+      {type:"table",table:{headers:["Действие","Описание"],rows:[["Скачать видео","Скачать видеофайл на ваше устройство"],["Скачать аудио","Извлечь и скачать аудиодорожку в формате AAC (.m4a)"],["Поделиться","Сформировать публичную ссылку для просмотра"],["Описание","Открыть окно с полным описанием видео и тайм-кодами"],["Открыть на YouTube","Перейти к оригиналу видео на YouTube"],["Просмотрено","Отметить видео как просмотренное"],["Не очищать","Защитить видео от автоматического удаления"],["Удалить","Удалить видео из медиатеки"]]}},
+      {type:"paragraph",text:"При скачивании аудио система извлекает звуковую дорожку и перекодирует её в формат AAC. Параметры перекодирования (битрейт, моно/стерео) настраиваются администратором. Пока идёт подготовка аудиофайла, индикатор фоновых задач в заголовке отображает прогресс, а по завершении появляется уведомление с именем файла."},
+      {type:"heading",text:"Поиск",level:3},
+      {type:"paragraph",text:"Строка поиска в верхней панели позволяет искать видео по нескольким критериям одновременно: названию, описанию, имени канала и датам. Для выполнения поиска введите запрос в текстовое поле и нажмите Enter. Результаты отображаются непосредственно в рабочей области медиатеки."}
+    ]
+  },
+  {
+    id:"download",number:5,title:"Скачивание видео",icon:"download",
+    blocks:[
+      {type:"paragraph",text:"DVStream предоставляет два способа скачивания видео: ручной (по URL) и автоматический (через подписки на каналы)."},
+      {type:"heading",text:"Ручное скачивание",level:3},
+      {type:"paragraph",text:"Для скачивания отдельного видео нажмите кнопку <strong>«Скачать видео»</strong> в верхней панели. Откроется диалоговое окно:"},
+      {type:"image",src:"07_download_dialog_fbc70fde.webp",alt:"Диалог скачивания видео",caption:"Рис. 6. Диалог скачивания видео. Вставьте ссылку, нажмите кнопку с лупой для получения информации, затем выберите качество и нажмите «Скачать»."},
+      {type:"paragraph",text:"Процесс скачивания состоит из нескольких шагов:"},
+      {type:"steps",items:["<strong>Вставьте ссылку</strong> на видео с YouTube или другой поддерживаемой платформы в текстовое поле.","<strong>Нажмите кнопку с лупой</strong> (справа от поля ввода) для получения информации о видео. Система загрузит метаданные: название, превью, длительность и доступные варианты качества.","<strong>Выберите качество</strong> из выпадающего списка. Доступны варианты от 360p до 4K, а также опция <strong>«Лучшее доступное»</strong>, которая автоматически выберет максимальное качество.","<strong>Нажмите «Скачать»</strong> для запуска загрузки. Видео будет добавлено в очередь загрузок."],ordered:true},
+      {type:"paragraph",text:"После запуска скачивания вы можете закрыть диалог и продолжить работу — загрузка выполняется в фоновом режиме. Прогресс можно отслеживать в разделе <strong>«Очередь»</strong>."},
+      {type:"heading",text:"Автоматическое скачивание",level:3},
+      {type:"paragraph",text:"Автоматическое скачивание реализуется через систему подписок (подробнее — в разделе 6). Приложение периодически проверяет каналы, на которые вы подписаны, и автоматически ставит новые видео в очередь загрузки. Проверку можно инициировать вручную в любой момент, нажав кнопку <strong>«Проверить обновления»</strong> в верхней панели."}
+    ]
+  },
+  {
+    id:"subscriptions",number:6,title:"Подписки",icon:"rss",
+    blocks:[
+      {type:"paragraph",text:"Раздел <strong>«Подписки»</strong> обеспечивает автоматическую загрузку новых видео с выбранных каналов YouTube. Это ключевая функция для поддержания медиатеки в актуальном состоянии без ручного вмешательства."},
+      {type:"heading",text:"Обзор страницы подписок",level:3},
+      {type:"image",src:"09_subscriptions_87b1450f.webp",alt:"Страница подписок",caption:"Рис. 7. Страница подписок. Вверху — секция «Мои подписки» с раскрытой категорией. Внизу — секция «Доступные» с публичными подписками других пользователей."},
+      {type:"paragraph",text:"Страница подписок разделена на две секции:"},
+      {type:"paragraph",text:"<strong>Мои подписки.</strong> Здесь отображаются все каналы, на которые вы подписаны. Подписки сгруппированы по категориям, которые вы задали при их создании. Каждую категорию можно свернуть или развернуть нажатием на её название. Справа от названия категории указано количество каналов в скобках и кнопка принудительной проверки обновлений для всей категории."},
+      {type:"paragraph",text:"<strong>Доступные.</strong> В этой секции отображаются публичные подписки других пользователей системы, сгруппированные по категориям их авторов. Для каждой доступной подписки предусмотрена кнопка <strong>«Добавить к подпискам»</strong>, которая создаёт вашу собственную подписку с аналогичными параметрами и запускает загрузку исторических видео."},
+      {type:"heading",text:"Карточка подписки",level:3},
+      {type:"table",table:{headers:["Элемент","Описание"],rows:[["Аватар канала","Изображение канала с YouTube"],["Название канала","Имя YouTube-канала"],["Количество видео","Число скачанных видео с этого канала"],["Дата обновления","Время последней проверки новых видео"],["Период актуальности","За сколько дней скачиваются видео"],["Качество","Выбранное качество скачивания"],["Статус","Активна или приостановлена"]]}},
+      {type:"paragraph",text:"На карточке подписки расположены кнопки действий:"},
+      {type:"table",table:{headers:["Кнопка","Описание"],rows:[["Частная/Публичная","Переключение видимости подписки (замок — частная, глобус — публичная)"],["Открыть на YouTube","Переход к каналу на YouTube"],["Проверить обновление","Принудительная проверка новых видео"],["Очистить скачанные видео","Удаление всех скачанных видео канала"],["Удалить старые видео","Удаление видео старше указанного периода"],["Редактировать","Изменение параметров подписки"],["Удалить подписку","Полное удаление подписки"]]}},
+      {type:"heading",text:"Добавление подписки",level:3},
+      {type:"paragraph",text:"Для создания новой подписки нажмите кнопку <strong>«Добавить подписку»</strong> в верхней панели или на странице подписок. Откроется диалоговое окно:"},
+      {type:"image",src:"08_add_subscription_ab178d84.webp",alt:"Диалог добавления подписки",caption:"Рис. 8. Диалог добавления подписки. Заполните ссылку на канал, настройте параметры актуальности, качества и категории, затем нажмите «Подписаться»."},
+      {type:"table",table:{headers:["Параметр","Описание","Пример"],rows:[["Ссылка на канал","URL канала на YouTube","https://youtube.com/@channel"],["Актуальность","За сколько дней скачивать видео","7 дней, 30 дней"],["Удалять через","Период автоматического удаления старых видео (0 = не удалять)","30 дней"],["Качество","Предпочтительное качество скачивания","Лучшее, 1080p, 720p, 480p"],["Категория","Группировка для организации подписок","Политика, Финансы и др."]]}},
+      {type:"paragraph",text:"После нажатия кнопки <strong>«Подписаться»</strong> система начнёт проверку канала и поставит в очередь скачивание видео, соответствующих заданному периоду актуальности."},
+      {type:"heading",text:"Как работает автоматика",level:3},
+      {type:"paragraph",text:"Приложение периодически проверяет каналы всех активных подписок на наличие новых видео. Видео, дата публикации которых выходит за рамки заданного пользователем «окна по датам» (параметр «Актуальность»), не ставятся на скачивание и попадают в категорию <strong>«Отверженные»</strong> в очереди. При успешной проверке обновляется время последней проверки на карточке подписки. В случае ошибок проверка автоматически повторяется позже."}
+    ]
+  },
+  {
+    id:"queue",number:7,title:"Очередь загрузок",icon:"list",
+    blocks:[
+      {type:"paragraph",text:"Раздел <strong>«Очередь»</strong> предоставляет полный контроль над процессом скачивания видео. Здесь отображаются все текущие, завершённые и проблемные загрузки."},
+      {type:"heading",text:"Секции очереди",level:3},
+      {type:"image",src:"10_queue_265460ac.webp",alt:"Очередь загрузок — загруженные видео",caption:"Рис. 9. Страница очереди загрузок. Вверху — кнопки массового управления. Ниже — секции с загруженными видео (зелёные карточки)."},
+      {type:"paragraph",text:"Очередь разделена на четыре секции, каждая из которых имеет визуальную цветовую маркировку:"},
+      {type:"table",table:{headers:["Секция","Цвет","Описание"],rows:[["Активные","Синий","Загрузки, выполняющиеся в данный момент, или задачи в состоянии ожидания"],["Загруженные","Зелёный","Успешно скачанные видео с указанием размера и даты завершения"],["Отверженные","Жёлтый","Задания, отклонённые автоматически (например, видео старше допустимого периода)"],["С ошибками","Красный","Задания, которые не удалось выполнить, с описанием причины ошибки"]]}},
+      {type:"heading",text:"Информация о загрузке",level:3},
+      {type:"paragraph",text:"Для каждой задачи в очереди отображаются:"},
+      {type:"list",items:["<strong>Название видео</strong> — кликабельная ссылка, ведущая к видео в медиатеке (для завершённых загрузок).","<strong>Канал</strong> — имя канала-источника.","<strong>Дата публикации</strong> — дата публикации видео на YouTube.","<strong>Размер</strong> — объём скачанного файла (для завершённых загрузок).","<strong>Статус</strong> — текущее состояние задачи (Загрузка, Ожидание, Готово, Ошибка, Отвергнуто).","<strong>Дата завершения</strong> — когда задача была завершена или произошла ошибка.","<strong>Прогресс</strong> — для активных загрузок отображается процент выполнения и объём скачанных данных."]},
+      {type:"heading",text:"Обработка ошибок",level:3},
+      {type:"image",src:"11_queue_errors_1fe99ebe.webp",alt:"Секция с ошибками в очереди",caption:"Рис. 10. Секции «Отверженные» (жёлтые) и «С ошибками» (красные). Для каждой ошибки указана причина и доступна кнопка «Повторить»."},
+      {type:"paragraph",text:"Секция <strong>«Отверженные»</strong> содержит видео, которые система отклонила автоматически. Наиболее частая причина — видео старше допустимого периода загрузки подписки. Для каждого отверженного видео указана причина отклонения."},
+      {type:"paragraph",text:"Секция <strong>«С ошибками»</strong> содержит задачи, при выполнении которых произошёл сбой. Для каждой ошибки отображается техническое описание проблемы. Типичные причины ошибок включают необходимость авторизации на YouTube (возрастные ограничения) или требование членства в канале для доступа к эксклюзивному контенту. Справа от каждой ошибочной задачи расположена кнопка <strong>«Повторить»</strong> для повторной попытки скачивания."},
+      {type:"heading",text:"Массовое управление",level:3},
+      {type:"table",table:{headers:["Кнопка","Описание"],rows:[["Пауза для всех","Приостановить все активные загрузки"],["Повторить ошибки","Запустить повторное скачивание для всех задач с ошибками"],["Очистить очередь","Удалить все завершённые, отверженные и ошибочные записи"]]}},
+      {type:"paragraph",text:"Для каждой отдельной активной загрузки также доступны кнопки <strong>«Пауза»</strong> и <strong>«Отмена»</strong>."}
+    ]
+  },
+  {
+    id:"player",number:8,title:"Видеоплеер",icon:"play",
+    blocks:[
+      {type:"paragraph",text:"Встроенный видеоплеер DVStream открывается при нажатии кнопки <strong>«Смотреть»</strong> на карточке видео. Плеер запускается в модальном окне поверх текущей страницы."},
+      {type:"heading",text:"Основные элементы управления",level:3},
+      {type:"image",src:"05_video_player_10e199e9.webp",alt:"Видеоплеер DVStream",caption:"Рис. 11. Встроенный видеоплеер с элементами управления: воспроизведение, прогресс, громкость, скорость, полноэкранный режим."},
+      {type:"paragraph",text:"<strong>Воспроизведение.</strong> Запуск и остановка воспроизведения осуществляются кнопкой Play/Pause или кликом по области видео. Панель управления автоматически скрывается после периода неактивности и появляется при движении мыши или касании экрана."},
+      {type:"paragraph",text:"<strong>Прогресс и перемотка.</strong> Шкала прогресса позволяет перематывать к нужному моменту видео. Поддерживается перемотка клавишами клавиатуры (стрелки влево/вправо для перемотки на 10 секунд), а также долгим нажатием по краям окна плеера."},
+      {type:"paragraph",text:"<strong>Громкость.</strong> Регулировка громкости доступна через ползунок в панели управления, клавиши клавиатуры (стрелки вверх/вниз) и кнопку отключения звука (Mute)."},
+      {type:"paragraph",text:"<strong>Скорость воспроизведения.</strong> Кнопка скорости позволяет выбрать один из предустановленных вариантов: 0.5x, 0.75x, 1x (нормальная), 1.25x, 1.5x и 2x."},
+      {type:"paragraph",text:"<strong>Полноэкранный режим.</strong> Активируется специальной кнопкой или двойным кликом по области видео. Для выхода из полноэкранного режима нажмите Escape или повторно дважды кликните по видео."},
+      {type:"heading",text:"Продолжение просмотра",level:3},
+      {type:"paragraph",text:"DVStream автоматически сохраняет позицию просмотра для каждого видео. Позиция записывается при паузе, смене состояния и периодически по таймеру. При повторном открытии видео воспроизведение начнётся с сохранённой точки. Видео с сохранённой позицией отображаются в списке <strong>«Просматриваемые»</strong> в медиатеке."},
+      {type:"heading",text:"Мини-плеер",level:3},
+      {type:"paragraph",text:"Если вы хотите продолжить работу в приложении, не прерывая просмотр, воспроизведение можно перевести в режим мини-плеера. Мини-плеер отображается в нижней части экрана и не блокирует взаимодействие с интерфейсом. Он позволяет быстро поставить видео на паузу или возобновить воспроизведение."},
+      {type:"paragraph",text:"При наличии аудио-версии видео мини-плеер поддерживает переключение между режимами <strong>«Видео»</strong> и <strong>«Аудио»</strong>, что полезно для экономии трафика при слабом канале связи. Если в описании видео присутствуют тайм-коды (главы), нажатие на заголовок в мини-плеере открывает меню эпизодов для быстрой навигации."},
+      {type:"heading",text:"Трансляция на Chromecast",level:3},
+      {type:"paragraph",text:"При наличии устройства Chromecast (или совместимого) в той же локальной сети в панели управления плеера появляется кнопка трансляции. Нажатие на неё передаёт воспроизведение на телевизор: отправляются ссылка на видеопоток, заголовок и превью. Трансляция поддерживается в браузере Chrome и других браузерах с поддержкой Google Cast SDK."}
+    ]
+  },
+  {
+    id:"profile",number:9,title:"Профиль",icon:"user",
+    blocks:[
+      {type:"paragraph",text:"Страница профиля доступна по нажатию на аватар пользователя в нижней части сайдбара или по прямому адресу <code>/profile</code>."},
+      {type:"image",src:"12_profile_2c6e0c51.webp",alt:"Страница профиля",caption:"Рис. 12. Страница профиля пользователя: основные данные, интеграция с Telegram и смена пароля."},
+      {type:"heading",text:"Основные данные",level:3},
+      {type:"table",table:{headers:["Поле","Описание"],rows:[["Аватар","Загрузка изображения профиля (PNG, JPG, WebP)"],["Имя","Отображаемое имя в системе"],["Email","Адрес электронной почты"],["Telegram Chat ID","Числовой идентификатор чата для получения уведомлений"]]}},
+      {type:"paragraph",text:"После внесения изменений нажмите кнопку <strong>«Сохранить»</strong> для их применения."},
+      {type:"heading",text:"Интеграция с Telegram",level:3},
+      {type:"paragraph",text:"DVStream поддерживает отправку уведомлений в Telegram. Для настройки необходимо указать ваш личный числовой Chat ID (не ID бота) в поле <strong>«Telegram Chat ID»</strong>. Узнать свой Chat ID можно через бота <code>@userinfobot</code> в Telegram — напишите ему <code>/id</code> или <code>/start</code>, и бот пришлёт ваш числовой идентификатор."},
+      {type:"paragraph",text:"Кнопка <strong>«Тестовое уведомление»</strong> позволяет проверить корректность настройки: если поле Chat ID заполнено, система отправит тестовое сообщение в ваш Telegram. Уведомления используются для информирования об ошибках скачивания и других важных событиях."},
+      {type:"heading",text:"Смена пароля",level:3},
+      {type:"paragraph",text:"Блок <strong>«Смена пароля»</strong> предназначен для аккаунтов с авторизацией по логину и паролю. Для смены пароля заполните три поля: текущий пароль, новый пароль и подтверждение нового пароля, затем нажмите <strong>«Изменить пароль»</strong>."},
+      {type:"heading",text:"Выход из системы",level:3},
+      {type:"paragraph",text:"Кнопка <strong>«Выйти»</strong> в правом верхнем углу страницы профиля завершает текущую сессию и перенаправляет на страницу входа."}
+    ]
+  },
+  {
+    id:"sharing",number:10,title:"Поделиться видео",icon:"share",
+    blocks:[
+      {type:"paragraph",text:"DVStream позволяет делиться видео с другими людьми, даже если они не зарегистрированы в системе."},
+      {type:"heading",text:"Формирование ссылки",level:3},
+      {type:"paragraph",text:"Действие <strong>«Поделиться»</strong> доступно в контекстном меню карточки видео и в видеоплеере. При нажатии формируется публичная ссылка вида <code>/watch/&lt;videoId&gt;</code>, которую можно:"},
+      {type:"list",items:["<strong>Отправить в Telegram</strong> — ссылка будет отправлена через Telegram-бота (если настроен).","<strong>Скопировать в буфер обмена</strong> — для отправки любым удобным способом."]},
+      {type:"paragraph",text:"Видео, открытое по публичной ссылке, доступно для просмотра без авторизации в системе. Это удобно для обмена интересным контентом с друзьями и коллегами."},
+      {type:"heading",text:"Трансляция на Chromecast",level:3},
+      {type:"paragraph",text:"Помимо просмотра в браузере, видео можно транслировать на телевизор через Chromecast. Для этого устройство Chromecast должно находиться в той же локальной сети, что и компьютер пользователя. Кнопка трансляции появляется автоматически в плеере и в контекстном меню карточки видео."}
+    ]
+  },
+  {
+    id:"cleanup",number:11,title:"Авто-очистка",icon:"trash",
+    blocks:[
+      {type:"paragraph",text:"Для управления объёмом хранилища DVStream поддерживает автоматическое удаление старых видео."},
+      {type:"heading",text:"Настройка авто-очистки",level:3},
+      {type:"paragraph",text:"При создании или редактировании подписки параметр <strong>«Удалять через»</strong> определяет, через сколько дней после скачивания видео будет автоматически удалено. Значение <strong>0</strong> означает, что автоматическое удаление отключено и видео хранятся бессрочно."},
+      {type:"heading",text:"Защита от удаления",level:3},
+      {type:"paragraph",text:"Пользователь может защитить важные видео от автоматического удаления двумя способами:"},
+      {type:"table",table:{headers:["Способ защиты","Как применить","Результат"],rows:[["Отметка «Не очищать»","Контекстное меню видео → «Не очищать»","Видео не удаляется автоматически, даже если подходит под критерии"],["Закрепление","Кнопка «Закрепить» на карточке видео","Закреплённые видео любого пользователя не удаляются автоматически"]]}},
+      {type:"paragraph",text:"Обе защиты работают независимо друг от друга. Если видео одновременно закреплено и помечено как «Не очищать», оно защищено двойным образом."}
+    ]
+  },
+  {
+    id:"shortcuts",number:12,title:"Клавиатурные сокращения",icon:"keyboard",
+    blocks:[
+      {type:"paragraph",text:"Для удобства работы с видеоплеером DVStream поддерживает набор клавиатурных сокращений:"},
+      {type:"kbd-table",rows:[{key:"Space",action:"Воспроизведение / Пауза"},{key:"←",action:"Перемотка на 10 секунд назад"},{key:"→",action:"Перемотка на 10 секунд вперёд"},{key:"↑",action:"Увеличение громкости"},{key:"↓",action:"Уменьшение громкости"},{key:"F",action:"Полноэкранный режим"},{key:"M",action:"Включение / выключение звука (Mute)"},{key:"Escape",action:"Выход из полноэкранного режима или закрытие плеера"}]},
+      {type:"paragraph",text:"Клавиатурные сокращения активны, когда фокус находится на области видеоплеера. Для активации фокуса достаточно кликнуть по области плеера."},
+      {type:"callout",text:"<strong>Совет.</strong> После первого входа в систему рекомендуется сразу настроить профиль: задать отображаемое имя, привязать Telegram для уведомлений и при необходимости сменить пароль по умолчанию."}
+    ]
+  }
+];
+
+// ─── Icons SVG ────────────────────────────────────────────────────────────────
+const ICONS = {
+  book:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>',
+  login:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>',
+  layout:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>',
+  film:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/></svg>',
+  download:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+  rss:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1" fill="currentColor"/></svg>',
+  list:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>',
+  play:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>',
+  user:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+  share:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>',
+  trash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>',
+  keyboard:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><line x1="6" y1="10" x2="6.01" y2="10"/><line x1="10" y1="10" x2="10.01" y2="10"/><line x1="14" y1="10" x2="14.01" y2="10"/><line x1="18" y1="10" x2="18.01" y2="10"/><line x1="8" y1="14" x2="16" y2="14"/></svg>',
+};
+
+// ─── Render ───────────────────────────────────────────────────────────────────
+function renderBlock(block) {
+  switch(block.type) {
+    case 'paragraph':
+      return `<p class="doc-p">${block.text}</p>`;
+    case 'heading':
+      return block.level===3
+        ? `<h3 class="doc-h3">${block.text}</h3>`
+        : `<h4 class="doc-h4">${block.text}</h4>`;
+    case 'image':
+      return `<figure class="doc-figure">
+        <img class="doc-img" src="${CDN}/${block.src}" alt="${block.alt||''}" loading="lazy" data-src="${CDN}/${block.src}" data-alt="${block.alt||''}"/>
+        ${block.caption?`<figcaption>${block.caption}</figcaption>`:''}
+      </figure>`;
+    case 'table':
+      return `<div class="table-wrap"><table>
+        <thead><tr>${block.table.headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead>
+        <tbody>${block.table.rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table></div>`;
+    case 'list':
+      return `<ul class="doc-list">${block.items.map(i=>`<li><span>${i}</span></li>`).join('')}</ul>`;
+    case 'steps':
+      return `<ol class="doc-steps">${block.items.map(i=>`<li><span>${i}</span></li>`).join('')}</ol>`;
+    case 'callout':
+      return `<div class="doc-callout">${block.text}</div>`;
+    case 'kbd-table':
+      return `<div class="kbd-table">${block.rows.map(r=>`<div class="kbd-row"><kbd>${r.key}</kbd><span class="kbd-action">${r.action}</span></div>`).join('')}</div>`;
+    default: return '';
+  }
+}
+
+function renderSection(s) {
+  return `<section id="${s.id}" class="doc-section" data-title="${s.title}" data-number="${s.number}">
+    <div class="section-header">
+      <div class="section-icon">${ICONS[s.icon]||''}</div>
+      <div>
+        <div class="section-meta">Раздел ${s.number}</div>
+        <h2 class="section-title">${s.title}</h2>
+      </div>
+    </div>
+    <hr class="section-divider"/>
+    ${s.blocks.map(renderBlock).join('')}
+  </section>`;
+}
+
+// ─── Build DOM ────────────────────────────────────────────────────────────────
+const navList = document.getElementById('nav-list');
+const quickNav = document.getElementById('quick-nav');
+const container = document.getElementById('sections-container');
+
+SECTIONS.forEach(s => {
+  // Sidebar nav
+  const btn = document.createElement('button');
+  btn.className = 'nav-btn';
+  btn.dataset.id = s.id;
+  btn.innerHTML = `${ICONS[s.icon]||''}<span>${s.number}. ${s.title}</span>`;
+  btn.addEventListener('click', () => {
+    scrollToSection(s.id);
+    closeMobileSidebar();
+  });
+  navList.appendChild(btn);
+
+  // Quick nav
+  const qb = document.createElement('button');
+  qb.className = 'qnav-btn';
+  qb.dataset.id = s.id;
+  qb.textContent = `${s.number}. ${s.title}`;
+  qb.addEventListener('click', () => scrollToSection(s.id));
+  quickNav.appendChild(qb);
+
+  // Section content
+  const div = document.createElement('div');
+  div.innerHTML = renderSection(s);
+  container.appendChild(div.firstElementChild);
+});
+
+// ─── Scroll & Active ──────────────────────────────────────────────────────────
+function scrollToSection(id) {
+  const el = document.getElementById(id);
+  if(el) el.scrollIntoView({behavior:'smooth'});
+}
+
+function setActive(id) {
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.id===id));
+  document.querySelectorAll('.qnav-btn').forEach(b => b.classList.toggle('active', b.dataset.id===id));
+  // Scroll quick nav to active
+  const activeQnav = quickNav.querySelector('.qnav-btn.active');
+  if(activeQnav) activeQnav.scrollIntoView({behavior:'smooth',block:'nearest',inline:'center'});
+}
+
+const observer = new IntersectionObserver(entries => {
+  entries.forEach(e => { if(e.isIntersecting) setActive(e.target.id); });
+}, {rootMargin:'-20% 0px -70% 0px'});
+
+document.querySelectorAll('.doc-section').forEach(s => observer.observe(s));
+
+function syncHelpHeroSticky() {
+  const hero = document.getElementById('hero');
+  if (!hero) return;
+  hero.classList.toggle('hero--compact', window.scrollY > 12);
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      document.documentElement.style.setProperty('--help-hero-sticky-h', hero.offsetHeight + 'px');
+    });
+  });
+}
+
+function applyLocationHash() {
+  const h = (location.hash || '').replace(/^#/, '');
+  if (h && document.getElementById(h)) {
+    setActive(h);
+    requestAnimationFrame(() => {
+      const el = document.getElementById(h);
+      if (el) el.scrollIntoView({ behavior: 'auto', block: 'start' });
+      syncHelpHeroSticky();
+    });
+  } else {
+    setActive(SECTIONS[0].id);
+  }
+}
+applyLocationHash();
+requestAnimationFrame(() => syncHelpHeroSticky());
+window.addEventListener('hashchange', () => {
+  applyLocationHash();
+  requestAnimationFrame(() => syncHelpHeroSticky());
+});
+window.addEventListener('resize', syncHelpHeroSticky);
+
+// ─── Scroll-to-top ────────────────────────────────────────────────────────────
+const scrollTopBtn = document.getElementById('scroll-top');
+window.addEventListener('scroll', () => {
+  scrollTopBtn.classList.toggle('visible', window.scrollY > 400);
+  syncHelpHeroSticky();
+}, { passive: true });
+scrollTopBtn.addEventListener('click', () => window.scrollTo({top:0,behavior:'smooth'}));
+
+// ─── Lightbox ─────────────────────────────────────────────────────────────────
+const lightbox = document.getElementById('lightbox');
+const lightboxImg = document.getElementById('lightbox-img');
+document.querySelectorAll('.doc-img').forEach(img => {
+  img.addEventListener('click', () => {
+    lightboxImg.src = img.dataset.src;
+    lightboxImg.alt = img.dataset.alt;
+    lightbox.classList.add('open');
+    document.body.style.overflow='hidden';
+  });
+});
+lightbox.addEventListener('click', e => {
+  if(e.target===lightbox||e.target===document.getElementById('lightbox-close')) {
+    lightbox.classList.remove('open');
+    document.body.style.overflow='';
+  }
+});
+document.addEventListener('keydown', e => {
+  if(e.key==='Escape') { lightbox.classList.remove('open'); document.body.style.overflow=''; }
+});
+
+// ─── Search ───────────────────────────────────────────────────────────────────
+const searchInput = document.getElementById('search-input');
+const searchClear = document.getElementById('search-clear');
+const noResults = document.getElementById('no-results');
+
+function stripHtml(html) { const d=document.createElement('div'); d.innerHTML=html; return d.textContent||''; }
+
+function doSearch(q) {
+  q = q.trim().toLowerCase();
+  searchClear.style.display = q ? 'block' : 'none';
+  let anyVisible = false;
+  SECTIONS.forEach(s => {
+    const sectionEl = document.getElementById(s.id);
+    const navBtn = navList.querySelector(`[data-id="${s.id}"]`);
+    if(!q) {
+      sectionEl.style.display='';
+      navBtn.classList.remove('hidden');
+      anyVisible = true;
+      return;
+    }
+    const titleMatch = s.title.toLowerCase().includes(q);
+    const contentMatch = s.blocks.some(b => {
+      if(b.text && stripHtml(b.text).toLowerCase().includes(q)) return true;
+      if(b.items && b.items.some(i => stripHtml(i).toLowerCase().includes(q))) return true;
+      if(b.table && b.table.rows.some(r => r.some(c => c.toLowerCase().includes(q)))) return true;
+      if(b.rows && b.rows.some(r => r.action.toLowerCase().includes(q))) return true;
+      return false;
+    });
+    const visible = titleMatch || contentMatch;
+    sectionEl.style.display = visible ? '' : 'none';
+    navBtn.classList.toggle('hidden', !visible);
+    if(visible) anyVisible = true;
+  });
+  noResults.style.display = anyVisible ? 'none' : 'block';
+}
+
+searchInput.addEventListener('input', e => doSearch(e.target.value));
+searchClear.addEventListener('click', () => { searchInput.value=''; doSearch(''); searchInput.focus(); });
+
+// ─── Mobile sidebar ───────────────────────────────────────────────────────────
+const sidebar = document.getElementById('sidebar');
+const overlay = document.getElementById('sidebar-overlay');
+const mobileBtn = document.getElementById('mobile-menu-btn');
+
+function openMobileSidebar() { sidebar.classList.add('open'); overlay.style.display='block'; document.body.style.overflow='hidden'; }
+function closeMobileSidebar() { sidebar.classList.remove('open'); overlay.style.display='none'; document.body.style.overflow=''; }
+
+mobileBtn.addEventListener('click', openMobileSidebar);
+overlay.addEventListener('click', closeMobileSidebar);
+document.getElementById('sidebar-close-btn')?.addEventListener('click', closeMobileSidebar);
+</script>
+</body>
+</html>

@@ -63,8 +63,25 @@ export const env = {
     if (v === 'none' || v === 'error' || v === 'warn' || v === 'info' || v === 'debug') return v;
     return 'info';
   },
+  /** Отладка Chromecast: сервер логирует запросы к /api/stream (терминал/Docker) */
+  chromecastDebug: (): boolean =>
+    ['1', 'true', 'yes', 'on'].includes(getEnv('CHROMECAST_DEBUG', '').toLowerCase()),
   telegramBotToken: () => getEnv('TELEGRAM_BOT_TOKEN', ''),
   telegramAdminChatId: () => getEnv('TELEGRAM_ADMIN_CHAT_ID', ''),
+  /** Отдельный бот для уведомлений пользователей о новых видео по подпискам (не админский). */
+  telegramUserBotToken: () => getEnv('TELEGRAM_USER_BOT_TOKEN', ''),
+  /**
+   * Секрет для webhook пользовательского бота (setWebhook с secret_token).
+   * Если задан — заголовок X-Telegram-Bot-Api-Secret-Token должен совпадать.
+   */
+  telegramUserBotWebhookSecret: () => getEnv('TELEGRAM_USER_BOT_WEBHOOK_SECRET', ''),
+  /**
+   * Как получать входящие команды пользовательского бота: webhook (по умолчанию) или polling (getUpdates в фоне, без HTTPS webhook).
+   */
+  telegramUserBotUpdatesMode: (): 'webhook' | 'polling' => {
+    const v = getEnv('TELEGRAM_USER_BOT_UPDATES_MODE', 'webhook').toLowerCase().trim();
+    return v === 'polling' ? 'polling' : 'webhook';
+  },
   /**
    * Битрейт AAC при извлечении аудио из видео (меню «Скачать» → «Аудио»).
    * Примеры: `96k`, `128k` или число `96` → `96k`.

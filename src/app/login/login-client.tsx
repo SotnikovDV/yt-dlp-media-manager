@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Loader2, Eye, EyeOff, User, Lock, Play } from 'lucide-react';
+import { HelpDocLink } from '@/components/help-doc-link';
 import { toast } from 'sonner';
 
 export default function LoginClient() {
@@ -204,6 +205,11 @@ export default function LoginClient() {
               <Link className="font-medium text-blue-600 hover:text-blue-700" href="/register">
                 Запросить доступ
               </Link>
+            </p>
+            <p className="text-xs text-slate-400 text-center">
+              <HelpDocLink section="auth" className="text-slate-500 hover:text-blue-600 font-normal">
+                Справка: вход и регистрация
+              </HelpDocLink>
             </p>
           </CardFooter>
         </Card>

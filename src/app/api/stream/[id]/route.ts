@@ -12,16 +12,53 @@ import {
   getDownloadSearchDirs,
 } from '@/lib/path-utils';
 import { getDownloadPathAsync } from '@/lib/settings';
+import { env } from '@/lib/env';
 
 export const runtime = 'nodejs';
+
+function streamLog(...args: unknown[]) {
+  if (env.chromecastDebug()) {
+    console.log('[stream]', new Date().toISOString(), ...args);
+  }
+}
+
+/** CORS для Chromecast и других медиа-клиентов: без заголовков браузер блокирует cross-origin запросы */
+const CORS_HEADERS: Record<string, string> = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+  'Access-Control-Allow-Headers': 'Range',
+  'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges',
+};
+
+function withCors(headers: Record<string, string>): Record<string, string> {
+  return { ...CORS_HEADERS, ...headers };
+}
+
+// OPTIONS — preflight для CORS (Chromecast может отправлять)
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: withCors({}),
+  });
+}
 
 // GET /api/stream/[id] - стриминг видео
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const { id } = await params;
+  streamLog(
+    'GET',
+    id,
+    'range:',
+    request.headers.get('range') ?? '(нет)',
+    'ua:',
+    request.headers.get('user-agent')?.slice(0, 80) ?? '(нет)',
+    'origin:',
+    request.headers.get('origin') ?? '(нет)'
+  );
   try {
-    const { id } = await params;
     
     let video = await db.video.findUnique({
       where: { id },
@@ -33,7 +70,11 @@ export async function GET(
     }
 
     if (!video) {
-      return NextResponse.json({ error: 'Video not found' }, { status: 404 });
+      streamLog(id, '404 video not found');
+      return NextResponse.json({ error: 'Video not found' }, {
+        status: 404,
+        headers: withCors({}),
+      });
     }
     let filePath: string | null = null;
 
@@ -60,18 +101,26 @@ export async function GET(
     }
 
     if (!filePath) {
-      return NextResponse.json({ error: 'File not found' }, { status: 404 });
+      streamLog(id, '404 file path not found');
+      return NextResponse.json({ error: 'File not found' }, {
+        status: 404,
+        headers: withCors({}),
+      });
     }
 
     if (!existsSync(filePath)) {
+      streamLog(id, '404 file not on disk', filePath);
       if (process.env.NODE_ENV === 'development') {
         console.warn('[stream] File not found:', { resolved: filePath, raw: video.filePath, cwd: process.cwd() });
         return NextResponse.json(
           { error: 'File not found', debug: { resolved: filePath, raw: video.filePath, cwd: process.cwd() } },
-          { status: 404 }
+          { status: 404, headers: withCors({}) }
         );
       }
-      return NextResponse.json({ error: 'File not found' }, { status: 404 });
+      return NextResponse.json({ error: 'File not found' }, {
+        status: 404,
+        headers: withCors({}),
+      });
     }
 
     const fileStat = await stat(filePath);
@@ -79,6 +128,7 @@ export async function GET(
     const range = request.headers.get('range');
 
     const ext = path.extname(filePath).toLowerCase();
+    streamLog(id, '200 OK', 'size:', fileSize, 'ext:', ext, 'range:', range ? 'yes' : 'no');
     const contentType =
       ext === '.mp4' ? 'video/mp4' :
       ext === '.webm' ? 'video/webm' :
@@ -106,9 +156,7 @@ export async function GET(
       if (!Number.isFinite(start) || start < 0 || start >= fileSize || end < start) {
         return new NextResponse(null, {
           status: 416,
-          headers: {
-            'Content-Range': `bytes */${fileSize}`,
-          }
+          headers: withCors({ 'Content-Range': `bytes */${fileSize}` }),
         });
       }
       const chunkSize = end - start + 1;
@@ -119,12 +167,12 @@ export async function GET(
       nodeStream.on('error', () => {}); // игнорируем ошибки при закрытии клиентом
       const webStream = Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
 
-      const headers: Record<string, string> = {
+      const headers: Record<string, string> = withCors({
         'Content-Range': `bytes ${start}-${end}/${fileSize}`,
         'Accept-Ranges': 'bytes',
         'Content-Length': String(chunkSize),
         'Content-Type': contentType,
-      };
+      });
       if (contentDisposition) headers['Content-Disposition'] = contentDisposition;
       return new NextResponse(webStream, { status: 206, headers });
     }
@@ -134,15 +182,19 @@ export async function GET(
     nodeStream.on('error', () => {}); // игнорируем ошибки при закрытии клиентом
     const webStream = Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
 
-    const headers: Record<string, string> = {
+    const headers: Record<string, string> = withCors({
       'Accept-Ranges': 'bytes',
       'Content-Length': String(fileSize),
       'Content-Type': contentType,
-    };
+    });
     if (contentDisposition) headers['Content-Disposition'] = contentDisposition;
     return new NextResponse(webStream, { headers });
   } catch (error) {
+    streamLog('ERROR', id, error);
     console.error('Error streaming video:', error);
-    return NextResponse.json({ error: 'Failed to stream video' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to stream video' }, {
+      status: 500,
+      headers: withCors({}),
+    });
   }
 }

@@ -25,6 +25,8 @@ import {
   Video as VideoIcon,
   Music2,
   Cast,
+  ListPlus,
+  Plus,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
@@ -32,6 +34,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Switch } from '@/components/ui/switch';
@@ -42,6 +45,7 @@ import { useChromecast } from '@/lib/use-chromecast';
 import { toast } from 'sonner';
 import { withAudioDownloadSlot } from '@/lib/client-audio-download-queue';
 import { fetchAndSavePreparedAudio } from '@/lib/prepared-audio-download';
+import type { PlaylistForCard } from '@/components/video-card';
 
 const VOLUME_STORAGE_KEY = 'video-player-volume';
 const AUTO_NEXT_STORAGE_KEY = 'video-player-auto-next';
@@ -57,6 +61,24 @@ const EDGE_ZONE_FRACTION = 0.15;
 const HOLD_DELAY_MS = 400;
 const HOLD_SEEK_INTERVAL_MS = 100;
 const HOLD_SEEK_STEP = 3;
+
+/** Узкий экран в портретной ориентации: отдельная разметка без панели (i). */
+function useNarrowPortrait(): boolean {
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const q = window.matchMedia('(max-width: 767px) and (orientation: portrait)');
+    const apply = () => setNarrow(q.matches);
+    apply();
+    q.addEventListener('change', apply);
+    window.addEventListener('orientationchange', apply);
+    return () => {
+      q.removeEventListener('change', apply);
+      window.removeEventListener('orientationchange', apply);
+    };
+  }, []);
+  return narrow;
+}
 
 // ——— Рендеринг описания видео в панели плеера ———
 
@@ -133,10 +155,9 @@ function renderDescriptionInPlayer(
   });
 }
 
-// ——— Боковая панель описания видео (fullscreen) ———
+// ——— Боковая панель описания и действий (по кнопке (i)) ———
 
 interface VideoInfoPanelProps {
-  open: boolean;
   title: string;
   description: string;
   youtubeUrl?: string | null;
@@ -352,8 +373,173 @@ function VideoInfoActionsToolbar({
   );
 }
 
+export interface VideoPlayerPlaylistMenu {
+  playlists: PlaylistForCard[];
+  videoId: string;
+  onAddToPlaylist: (playlistId: string, videoId: string) => void | Promise<void>;
+  onRemoveFromPlaylist?: (playlistId: string, videoId: string) => void | Promise<void>;
+  onCreatePlaylistAndAdd?: (videoId: string, name?: string) => void | Promise<void>;
+}
+
+/** Оконный режим: закрепить, плейлист, закрыть; либо только «Закрыть» (например /watch). */
+function PlayerMobileWindowedToolbar({
+  onlyClose,
+  bookmark,
+  playlistMenu,
+  onClosePlayer,
+  portalContainer,
+  controlsVisible,
+  resetHideTimer,
+}: {
+  onlyClose?: boolean;
+  bookmark?: VideoPlayerDescriptionToggleAction;
+  playlistMenu?: VideoPlayerPlaylistMenu;
+  onClosePlayer?: () => void;
+  portalContainer?: HTMLElement | null;
+  controlsVisible: boolean;
+  resetHideTimer: () => void;
+}) {
+  const [playlistOpen, setPlaylistOpen] = useState(false);
+  const btnBase =
+    'h-9 w-9 shrink-0 inline-flex items-center justify-center rounded-xl border transition-colors ' +
+    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/20 focus-visible:ring-offset-2 ' +
+    'focus-visible:ring-offset-black pointer-events-auto';
+  const btnRest =
+    'bg-white/5 border-white/10 text-white/80 hover:bg-white/10';
+  const btnActive = 'bg-primary/20 border-primary/30 text-primary/90';
+
+  const fadeIn = onlyClose ? controlsVisible : controlsVisible || playlistOpen;
+
+  return (
+    <div
+      className={cn(
+        'absolute top-3 right-3 z-30 flex max-w-[calc(100%-1rem)] flex-wrap items-center justify-end gap-1.5 transition-opacity duration-200',
+        fadeIn ? 'opacity-100' : 'opacity-0'
+      )}
+    >
+      {!onlyClose && bookmark && (
+        <button
+          type="button"
+          data-role="video-controls"
+          disabled={bookmark.disabled}
+          title={bookmark.active ? 'Убрать из закреплённых' : 'Закрепить'}
+          aria-pressed={bookmark.active}
+          onClick={(e) => {
+            e.stopPropagation();
+            bookmark.onToggle();
+            resetHideTimer();
+          }}
+          className={cn(btnBase, btnRest, bookmark.active && btnActive)}
+        >
+          <Pin
+            className={cn(
+              'h-5 w-5 shrink-0',
+              bookmark.active ? 'fill-primary/20 text-primary/90' : 'text-white/80',
+            )}
+          />
+        </button>
+      )}
+
+      {!onlyClose &&
+        playlistMenu?.onAddToPlaylist &&
+        playlistMenu.onCreatePlaylistAndAdd && (
+        <DropdownMenu open={playlistOpen} onOpenChange={setPlaylistOpen}>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              data-role="video-controls"
+              title="Добавить в плейлист"
+              className={cn(btnBase, btnRest)}
+              onClick={(e) => {
+                e.stopPropagation();
+                resetHideTimer();
+              }}
+            >
+              <ListPlus className="h-5 w-5 shrink-0" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            container={portalContainer ?? undefined}
+            onCloseAutoFocus={(e) => e.preventDefault()}
+          >
+            {playlistMenu.playlists.map((pl) => {
+              const alreadyIn = pl.videoIds.includes(playlistMenu.videoId);
+              return (
+                <DropdownMenuItem
+                  key={pl.id}
+                  disabled={alreadyIn && !playlistMenu.onRemoveFromPlaylist}
+                  className="flex items-center justify-between gap-2"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (alreadyIn) return;
+                    setPlaylistOpen(false);
+                    void playlistMenu.onAddToPlaylist(pl.id, playlistMenu.videoId);
+                  }}
+                >
+                  <span>
+                    {pl.name}
+                    {alreadyIn ? ' ✓' : ''}
+                  </span>
+                  {alreadyIn && playlistMenu.onRemoveFromPlaylist && (
+                    <button
+                      type="button"
+                      title="Удалить из плейлиста"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setPlaylistOpen(false);
+                        void playlistMenu.onRemoveFromPlaylist?.(pl.id, playlistMenu.videoId);
+                      }}
+                      className="ml-auto flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-destructive hover:bg-destructive/10"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </DropdownMenuItem>
+              );
+            })}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const name = window.prompt('Название плейлиста', '');
+                if (name != null && name.trim()) {
+                  setPlaylistOpen(false);
+                  void playlistMenu.onCreatePlaylistAndAdd?.(playlistMenu.videoId, name.trim());
+                }
+              }}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Новый плейлист
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+
+      {onClosePlayer && (
+        <button
+          type="button"
+          data-role="video-controls"
+          title="Закрыть"
+          aria-label="Закрыть плеер"
+          className={cn(btnBase, btnRest)}
+          onClick={(e) => {
+            e.stopPropagation();
+            resetHideTimer();
+            onClosePlayer();
+          }}
+        >
+          <X className="h-5 w-5 shrink-0" />
+        </button>
+      )}
+    </div>
+  );
+}
+
 function VideoInfoPanel({
-  open,
   title,
   description,
   youtubeUrl,
@@ -365,10 +551,7 @@ function VideoInfoPanel({
   return (
     <div
       data-role="video-controls"
-      className={cn(
-        'absolute right-0 top-0 bottom-0 z-40 w-80 bg-black/88 backdrop-blur-sm flex flex-col transition-transform duration-300 ease-in-out',
-        open ? 'translate-x-0' : 'translate-x-full'
-      )}
+      className="absolute right-0 top-0 bottom-0 z-40 w-80 max-w-[min(20rem,100%)] bg-black/88 backdrop-blur-sm flex flex-col animate-in fade-in-0 slide-in-from-right-2 duration-200"
     >
       <div className="flex items-start justify-between gap-2 px-4 pt-4 pb-3 border-b border-white/10 shrink-0">
         <h3 className="text-white font-semibold text-sm leading-snug">{title}</h3>
@@ -416,6 +599,19 @@ function formatPublishedDate(value: Date | string | null | undefined): string {
   return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+/** Есть ли что показать в боковой панели описания (кнопка (i), шапка диалога). */
+export function hasVideoInfoPanelContent(
+  description?: string | null,
+  youtubeUrl?: string | null,
+  descriptionActions?: VideoPlayerDescriptionActions
+): boolean {
+  if (description?.trim()) return true;
+  if (youtubeUrl) return true;
+  if (!descriptionActions) return false;
+  const a = descriptionActions;
+  return !!(a.favorite || a.bookmark || a.keep || a.share || a.download);
+}
+
 export interface VideoPlayerProps {
   src: string;
   title: string;
@@ -450,7 +646,7 @@ export interface VideoPlayerProps {
   initialFullscreen?: boolean;
   /** Колбэк для синхронизации текущей позиции и длительности с внешним компонентом (например, мини-плеером) */
   onTimeUpdate?: (currentTime: number, duration: number) => void;
-  /** Текст описания видео — показывается в боковой панели при нажатии кнопки (i) в fullscreen */
+  /** Текст описания видео — в боковой панели по кнопке (i) */
   description?: string;
   /** Ссылка на YouTube для отображения в панели описания */
   youtubeUrl?: string | null;
@@ -458,6 +654,27 @@ export interface VideoPlayerProps {
   descriptionActions?: VideoPlayerDescriptionActions;
   /** Базовый URL для построения абсолютных ссылок (стрим, постер) — нужен для Chromecast */
   baseUrl?: string;
+  /** Формат видео (mp4, webm, mkv) — для корректного contentType при трансляции на Chromecast */
+  format?: string | null;
+  /** Ссылка-бренд слева сверху (например «DVStream» в /watch по magic-link) */
+  brandHomeLink?: { label: string; href: string };
+  /** Закрыть страницу /watch (кнопка на мобильном в оконном режиме) */
+  onClosePlayer?: () => void;
+  /** Плейлисты для компактной панели на узком портрете */
+  playlistMenu?: VideoPlayerPlaylistMenu;
+  /**
+   * Оконный режим без внешней шапки (/watch): верхняя панель только «Закрыть»;
+   * Pin/плейлист/(i) — из полноэкранного режима.
+   */
+  windowedToolbarOnlyClose?: boolean;
+  /**
+   * Не показывать внутренний верхний тулбар (Pin / плейлист / закрыть), когда родитель
+   * уже рисует те же кнопки (оверлей медиатеки на мобильном).
+   */
+  hideInternalWindowedToolbar?: boolean;
+  /** Контролируемое открытие панели описания (шапка диалога медиатеки). */
+  infoOpen?: boolean;
+  onInfoOpenChange?: (open: boolean) => void;
 }
 
 export function VideoPlayer({
@@ -485,8 +702,22 @@ export function VideoPlayer({
   youtubeUrl,
   descriptionActions,
   baseUrl,
+  format,
+  brandHomeLink,
+  onClosePlayer,
+  playlistMenu,
+  windowedToolbarOnlyClose = false,
+  hideInternalWindowedToolbar = false,
+  infoOpen: infoOpenProp,
+  onInfoOpenChange,
 }: VideoPlayerProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [playerPortalContainer, setPlayerPortalContainer] =
+    useState<HTMLElement | null>(null);
+  const setPlayerContainerNode = useCallback((node: HTMLDivElement | null) => {
+    containerRef.current = node;
+    setPlayerPortalContainer(node);
+  }, []);
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
@@ -506,7 +737,21 @@ export function VideoPlayer({
   const [controlsVisible, setControlsVisible] = useState(true);
   const [isBuffering, setIsBuffering] = useState(false);
   const [volumeOpen, setVolumeOpen] = useState(false);
-  const [infoOpen, setInfoOpen] = useState(false);
+  const [internalInfoOpen, setInternalInfoOpen] = useState(false);
+  const isInfoControlled = typeof onInfoOpenChange === 'function';
+  const infoOpen = isInfoControlled ? (infoOpenProp ?? false) : internalInfoOpen;
+  const setInfoOpen = useCallback(
+    (next: boolean | ((prev: boolean) => boolean)) => {
+      if (isInfoControlled) {
+        const prev = infoOpenProp ?? false;
+        const resolved = typeof next === 'function' ? next(prev) : next;
+        onInfoOpenChange!(resolved);
+      } else {
+        setInternalInfoOpen((prev) => (typeof next === 'function' ? next(prev) : next));
+      }
+    },
+    [isInfoControlled, onInfoOpenChange, infoOpenProp],
+  );
   const [autoAdvance, setAutoAdvance] = useState(() => {
     if (typeof window === 'undefined') return true;
     const v = localStorage.getItem(AUTO_NEXT_STORAGE_KEY);
@@ -525,11 +770,44 @@ export function VideoPlayer({
   const holdZoneRef = useRef<'left' | 'right' | null>(null);
   const ignoreNextClickRef = useRef(false);
   const holdTouchIdRef = useRef<number | null>(null);
+  /** Перетаскивание полосы прогресса (мышь / тач), см. pointer capture */
+  const progressScrubbingRef = useRef(false);
+  const [isProgressScrubbing, setIsProgressScrubbing] = useState(false);
   const isAndroidChromeRef = useRef<boolean | null>(null);
   const { setTrack, setMode, setWasFullscreenBeforeMiniplayer } = useGlobalPlayerActions();
   const chromecast = useChromecast();
   const autoPlayOnceRef = useRef(false);
   const initialFullscreenAppliedRef = useRef(false);
+
+  const hasInfoPanelContent = hasVideoInfoPanelContent(
+    description,
+    youtubeUrl,
+    descriptionActions
+  );
+
+  const narrowPortrait = useNarrowPortrait();
+  const windowedMobilePortrait = narrowPortrait && !isFullscreen;
+
+  const showWindowedCloseOnly =
+    !mini &&
+    !isFullscreen &&
+    windowedToolbarOnlyClose &&
+    Boolean(onClosePlayer);
+
+  const showMobileWindowedToolbar =
+    !mini &&
+    !windowedToolbarOnlyClose &&
+    !hideInternalWindowedToolbar &&
+    windowedMobilePortrait &&
+    Boolean(
+      descriptionActions?.bookmark ||
+        (playlistMenu?.onAddToPlaylist && playlistMenu.onCreatePlaylistAndAdd) ||
+        onClosePlayer
+    );
+
+  /** Плавающая (i) только в полноэкранном режиме плеера. */
+  const showFloatingInfoButton =
+    !mini && hasInfoPanelContent && !windowedMobilePortrait && isFullscreen;
 
   // Сообщаем родителю, когда меняется видимость контролов
   useEffect(() => {
@@ -558,7 +836,7 @@ export function VideoPlayer({
     };
   }, []);
 
-  // Авто‑fullscreen при первом монтировании, если запрошено
+  // Авто‑fullscreen при первом монтировании, если запрошено (после привязки ref контейнера)
   useEffect(() => {
     if (!initialFullscreen || initialFullscreenAppliedRef.current) return;
     const container = containerRef.current;
@@ -567,7 +845,7 @@ export function VideoPlayer({
     if (document.fullscreenElement) return;
     container.requestFullscreen?.().catch(() => {});
     initialFullscreenAppliedRef.current = true;
-  }, [initialFullscreen]);
+  }, [initialFullscreen, playerPortalContainer]);
 
   // Ленивая детекция Android Chrome — чтобы при необходимости можно было менять поведение,
   // не трогая основной рендер (например, не вызывать manual pause при смене вкладки).
@@ -676,16 +954,58 @@ export function VideoPlayer({
     [duration]
   );
 
-  const handleProgressClick = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
+  const progressPercentFromClientX = useCallback((clientX: number, rect: DOMRect) => {
+    if (rect.width <= 0) return 0;
+    const x = clientX - rect.left;
+    return Math.max(0, Math.min(100, (x / rect.width) * 100));
+  }, []);
+
+  const handleProgressPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
       const el = e.currentTarget;
       const rect = el.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const p = (x / rect.width) * 100;
-      handleSeek(p);
+      handleSeek(progressPercentFromClientX(e.clientX, rect));
+      progressScrubbingRef.current = true;
+      setIsProgressScrubbing(true);
+      try {
+        el.setPointerCapture(e.pointerId);
+      } catch {
+        /* старые браузеры */
+      }
     },
-    [handleSeek]
+    [handleSeek, progressPercentFromClientX]
   );
+
+  const handleProgressPointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!progressScrubbingRef.current) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const el = e.currentTarget;
+      const rect = el.getBoundingClientRect();
+      handleSeek(progressPercentFromClientX(e.clientX, rect));
+    },
+    [handleSeek, progressPercentFromClientX]
+  );
+
+  const handleProgressPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!progressScrubbingRef.current) return;
+    progressScrubbingRef.current = false;
+    setIsProgressScrubbing(false);
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const handleProgressLostPointerCapture = useCallback(() => {
+    progressScrubbingRef.current = false;
+    setIsProgressScrubbing(false);
+  }, []);
 
   const handleVolumeChange = useCallback((value: number[]) => {
     const v = value[0] ?? 0;
@@ -838,11 +1158,14 @@ export function VideoPlayer({
     const onFsChange = () => {
       const fs = !!document.fullscreenElement;
       setIsFullscreen(fs);
-      if (!fs) setInfoOpen(false);
+      if (!fs) {
+        if (isInfoControlled) onInfoOpenChange?.(false);
+        else setInternalInfoOpen(false);
+      }
     };
     document.addEventListener('fullscreenchange', onFsChange);
     return () => document.removeEventListener('fullscreenchange', onFsChange);
-  }, []);
+  }, [isInfoControlled, onInfoOpenChange]);
 
   // После смены src (prev/next) восстанавливаем полноэкранный режим (браузер сбрасывает при смене видео).
   // Ref не очищаем до успешного requestFullscreen, иначе в React Strict Mode cleanup отменит таймер и fullscreen не восстановится.
@@ -1080,10 +1403,10 @@ export function VideoPlayer({
 
   return (
     <div
-      ref={containerRef}
+      ref={setPlayerContainerNode}
       data-player-role={mini ? 'mini' : undefined}
       className={cn(
-        ' w-full bg-black select-none',  // relative
+        'w-full bg-black select-none',
         fillContainer ? 'h-full min-h-0' : 'aspect-video'
       )}
       onMouseMove={resetHideTimer}
@@ -1117,6 +1440,19 @@ export function VideoPlayer({
         onCanPlay={handleCanPlay}
         onError={() => onError?.('Файл не найден или формат не поддерживается')}
       />
+
+      {!mini && brandHomeLink && (
+        <div className="absolute top-3 left-3 z-30 pointer-events-auto">
+          <Link
+            href={brandHomeLink.href}
+            onClick={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+            className="inline-flex items-center rounded-lg bg-black/55 px-2.5 py-1.5 text-xs font-semibold tracking-tight text-white/95 ring-1 ring-white/15 transition-colors hover:bg-black/75 hover:ring-white/25 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+          >
+            {brandHomeLink.label}
+          </Link>
+        </div>
+      )}
 
       {/* Центральная кнопка Play/Pause: в мини-плеере скрыта */}
       {!mini && (
@@ -1180,8 +1516,21 @@ export function VideoPlayer({
         </div>
       )}
 
-      {/* Кнопка (i) — только в fullscreen, только если есть описание */}
-      {!mini && isFullscreen && !!description && (
+      {/* Оконный режим: полная панель на узком портрете; только «Закрыть» на /watch (все ширины). */}
+      {(showWindowedCloseOnly || showMobileWindowedToolbar) && (
+        <PlayerMobileWindowedToolbar
+          onlyClose={showWindowedCloseOnly}
+          bookmark={descriptionActions?.bookmark}
+          playlistMenu={playlistMenu}
+          onClosePlayer={onClosePlayer}
+          portalContainer={playerPortalContainer}
+          controlsVisible={controlsVisible}
+          resetHideTimer={resetHideTimer}
+        />
+      )}
+
+      {/* Плавающая (i) — только в полноэкранном режиме */}
+      {showFloatingInfoButton && (
         <div
           className={cn(
             'absolute top-3 right-3 z-30 transition-opacity duration-200',
@@ -1208,15 +1557,16 @@ export function VideoPlayer({
         </div>
       )}
 
-      {/* Панель описания — прижата к правому краю, только в fullscreen */}
-      {!mini && isFullscreen && !!description && (
+      {/* Панель описания: шапка диалога (контроль) или плавающая (i) в fullscreen */}
+      {infoOpen &&
+        hasInfoPanelContent &&
+        (isInfoControlled || isFullscreen) && (
         <VideoInfoPanel
-          open={infoOpen}
           title={title}
-          description={description}
+          description={description ?? ''}
           youtubeUrl={youtubeUrl}
           descriptionActions={descriptionActions}
-          portalContainer={containerRef.current}
+          portalContainer={playerPortalContainer}
           onClose={() => setInfoOpen(false)}
           onSeekToTime={seekToAbsolute}
         />
@@ -1243,7 +1593,7 @@ export function VideoPlayer({
           <Button
             variant="ghost"
             size="icon"
-            className="h-9 w-9 text-white hover:bg-white/20 shrink-0"
+            className="h-9 w-9 text-white hover:bg-white/20 shrink-0 max-md:portrait:hidden"
             onClick={(e) => {
               e.stopPropagation();
               togglePlay();
@@ -1478,9 +1828,16 @@ export function VideoPlayer({
                   poster && !poster.startsWith('http')
                     ? `${origin}${poster.startsWith('/') ? '' : '/'}${poster}`
                     : poster;
+                const contentType =
+                  format === 'webm'
+                    ? ('video/webm' as const)
+                    : format === 'mkv'
+                      ? ('video/x-matroska' as const)
+                      : undefined;
                 try {
                   await chromecast.castMedia({
                     contentId: streamUrl,
+                    contentType,
                     title,
                     posterUrl: posterUrl || undefined,
                     currentTime: currentTime > 0 ? currentTime : undefined,
@@ -1514,8 +1871,17 @@ export function VideoPlayer({
 
         {/* Полоса прогресса (по центру, отступ 5px от кнопок); при наличии глав — сегменты как в YouTube */}
         <div
-          className="py-[5px] pt-1 h-1.5 cursor-pointer group/progress flex items-center pointer-events-auto relative"
-          onClick={handleProgressClick}
+          className={cn(
+            /* На мобильных — выше зона касания (~44px); на md+ — компактно как раньше */
+            'touch-none group/progress flex items-center pointer-events-auto relative select-none',
+            'py-2 min-h-[10px] md:min-h-0 md:py-[5px] md:pt-1',
+            isProgressScrubbing ? 'cursor-grabbing' : 'cursor-grab'
+          )}
+          onPointerDown={handleProgressPointerDown}
+          onPointerMove={handleProgressPointerMove}
+          onPointerUp={handleProgressPointerUp}
+          onPointerCancel={handleProgressPointerUp}
+          onLostPointerCapture={handleProgressLostPointerCapture}
           role="slider"
           aria-valuenow={currentTime}
           aria-valuemin={0}
@@ -1534,7 +1900,7 @@ export function VideoPlayer({
             }
           }}
         >
-          <div className="w-full h-1.5 rounded-full overflow-hidden relative">
+          <div className="w-full h-1.5 max-md:h-2 rounded-full overflow-hidden relative shrink-0">
             {/* Фон: сегменты по главам или один трек */}
             {chapters && chapters.length > 0 && duration > 0 ? (
               <div className="absolute inset-0 flex w-full">
@@ -1558,20 +1924,26 @@ export function VideoPlayer({
             {/* Поверх: красная полоса прогресса и скруббер */}
             <div className="absolute inset-0 w-full h-full overflow-hidden rounded-full">
               <div
-                className="h-full bg-red-600 rounded-full transition-all"
+                className={cn(
+                  'h-full bg-red-600 rounded-full',
+                  !isProgressScrubbing && 'transition-all'
+                )}
                 style={{ width: `${progressPercent}%` }}
               />
             </div>
             <div
-              className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-red-600 rounded-full opacity-0 group-hover/progress:opacity-100 transition-opacity shadow pointer-events-none"
-              style={{ left: `calc(${progressPercent}% - 6px)` }}
+              className={cn(
+                'absolute top-1/2 left-0 -translate-x-1/2 -translate-y-1/2 w-3 h-3 max-md:w-4 max-md:h-4 bg-red-600 rounded-full transition-opacity shadow pointer-events-none',
+                isProgressScrubbing ? 'opacity-100' : 'opacity-0 group-hover/progress:opacity-100'
+              )}
+              style={{ left: `${progressPercent}%` }}
             />
           </div>
         </div>
 
         {/* Информационный блок (ниже, с отступом 10px от полосы прокрутки) */}
         {!mini && (title || channelName || publishedAt) && (
-          <div className="mt-[10px] text-sm pointer-events-none space-y-0.5 min-w-0 [&_.channel-link]:pointer-events-auto [&_.channel-link]:cursor-pointer [&_.channel-link]:hover:underline [&_.channel-link]:focus:underline [&_.channel-link]:outline-none">
+          <div className="mt-[5px] mx-2 text-sm pointer-events-none space-y-0.5 min-w-0 [&_.channel-link]:pointer-events-auto [&_.channel-link]:cursor-pointer [&_.channel-link]:hover:underline [&_.channel-link]:focus:underline [&_.channel-link]:outline-none">
             {title && (
               <p className="text-white/90 truncate" title={title}>
                 {isFullscreen ? title : (title.length > 75 ? `${title.slice(0, 75)}…` : title)}

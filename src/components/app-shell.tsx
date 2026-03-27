@@ -19,6 +19,7 @@ import {
   ArrowLeftFromLine,
   Tag,
   Music2,
+  CircleHelp,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -31,6 +32,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { cn, formatVideoTime } from '@/lib/utils';
+import { helpDocHref } from '@/lib/help-doc';
 import { VideoPlayer } from '@/components/video-player';
 import { MiniAudioPlayer } from '@/components/mini-audio-player';
 import { useGlobalPlayerState, useGlobalPlayerActions } from '@/lib/player-store';
@@ -519,6 +521,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </DropdownMenuItem>
             </>
           )}
+          <DropdownMenuItem
+            asChild
+            className={cn(
+              'hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground [&_svg]:text-muted-foreground',
+              isMobileHeader ? 'text-popover-foreground' : 'text-secondary-foreground',
+            )}
+          >
+            <a href={helpDocHref()} target="_blank" rel="noopener noreferrer">
+              <CircleHelp className="mr-2 h-4 w-4" />
+              Справка
+            </a>
+          </DropdownMenuItem>
           <DropdownMenuSeparator className="-mx-1 my-1 h-px bg-border" />
           <DropdownMenuItem
             className="text-destructive hover:bg-destructive/10 hover:text-destructive focus:bg-destructive/10 focus:text-destructive data-[state=open]:bg-destructive/10 [&_svg]:text-destructive"

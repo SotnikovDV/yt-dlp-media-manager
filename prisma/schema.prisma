@@ -168,6 +168,7 @@ model Subscription {
   outputFolder     String?
   isActive         Boolean  @default(true)
   isPublic         Boolean  @default(false)
+  notifyOnNewVideos Boolean @default(false)
   checkInterval    Int      @default(360)
   lastCheckAt      DateTime?
   createdAt        DateTime @default(now())
@@ -265,7 +266,7 @@ model User {
   passwordHash String?
   avatarPath   String?
   passwordChangedAt DateTime?  // дата последней смены пароля (для admin: если не null — баннер не показываем)
-
+  telegramChatId String? @unique
   isAdmin      Boolean   @default(false)
   isAllowed    Boolean   @default(false)
 

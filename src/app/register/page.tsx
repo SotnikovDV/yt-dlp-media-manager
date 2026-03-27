@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Loader2, Eye, EyeOff, User, Mail, Lock, Play } from 'lucide-react';
+import { HelpDocLink } from '@/components/help-doc-link';
 import { toast } from 'sonner';
 
 async function jsonOrThrow(res: Response) {
@@ -236,6 +237,11 @@ export default function RegisterPage() {
               <Link className="font-medium text-blue-600 hover:text-blue-700" href="/login">
                 Войти
               </Link>
+            </p>
+            <p className="text-xs text-slate-400 text-center">
+              <HelpDocLink section="auth" className="text-slate-500 hover:text-blue-600 font-normal">
+                Справка: вход и регистрация
+              </HelpDocLink>
             </p>
           </CardFooter>
         </Card>

@@ -53,7 +53,17 @@ export async function PUT(
 
     const { id } = await params;
     const body = await request.json();
-    const { downloadDays, preferredQuality, outputFolder, checkInterval, isActive, isPublic, categoryId, autoDeleteDays } = body;
+    const {
+      downloadDays,
+      preferredQuality,
+      outputFolder,
+      checkInterval,
+      isActive,
+      isPublic,
+      categoryId,
+      autoDeleteDays,
+      notifyOnNewVideos,
+    } = body;
 
     const existing = await db.subscription.findFirst({
       where: { id, userId: session.user.id }
@@ -68,6 +78,7 @@ export async function PUT(
       isActive,
     };
     if (typeof isPublic === 'boolean') data.isPublic = isPublic;
+    if (typeof notifyOnNewVideos === 'boolean') data.notifyOnNewVideos = notifyOnNewVideos;
     if (typeof autoDeleteDays === 'number') {
       const n = Math.max(0, Math.floor(autoDeleteDays));
       data.autoDeleteDays = n;

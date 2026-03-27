@@ -23,6 +23,9 @@ type ProfileDto = {
   isAdmin: boolean;
   isAllowed: boolean;
   avatarUrl: string;
+  telegramChatId: string | null;
+  /** На сервере задан TELEGRAM_USER_BOT_WEBHOOK_SECRET — тест всегда переотправляет secret в Telegram */
+  telegramUserBotWebhookSecretEnabled?: boolean;
 };
 
 export default function ProfilePage() {
@@ -37,6 +40,9 @@ export default function ProfilePage() {
   const [profile, setProfile] = useState<ProfileDto | null>(null);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [telegramChatId, setTelegramChatId] = useState('');
+
+  const [telegramTestLoading, setTelegramTestLoading] = useState(false);
 
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -56,6 +62,7 @@ export default function ProfilePage() {
         setProfile(data);
         setName(data.name || '');
         setEmail(data.email || '');
+        setTelegramChatId(data.telegramChatId ?? '');
       } catch (e: any) {
         toast.error(e?.message || 'Не удалось загрузить профиль');
       } finally {
@@ -75,10 +82,24 @@ export default function ProfilePage() {
         await fetch('/api/profile', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, email }),
+          body: JSON.stringify({
+            name,
+            email,
+            telegramChatId: telegramChatId.trim() === '' ? null : telegramChatId.trim(),
+          }),
         })
       );
-      setProfile((p) => (p ? { ...p, ...data.user } : p));
+      setProfile((p) =>
+        p && data.user
+          ? {
+              ...p,
+              ...data.user,
+              avatarUrl: p.avatarUrl,
+              telegramUserBotWebhookSecretEnabled:
+                data.telegramUserBotWebhookSecretEnabled ?? p.telegramUserBotWebhookSecretEnabled,
+            }
+          : p
+      );
       toast.success('Профиль сохранён');
     } catch (e: any) {
       toast.error(e?.message || 'Ошибка сохранения');
@@ -109,6 +130,42 @@ export default function ProfilePage() {
       toast.error(e?.message || 'Ошибка смены пароля');
     } finally {
       setChangingPassword(false);
+    }
+  };
+
+  const sendTelegramTest = async () => {
+    setTelegramTestLoading(true);
+    try {
+      const data = await jsonOrThrow(
+        await fetch('/api/profile/telegram-test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            telegramChatId: telegramChatId.trim() === '' ? undefined : telegramChatId.trim(),
+          }),
+        })
+      );
+      if (data?.webhookError) {
+        toast.warning(`Сообщение отправлено, но webhook не настроился: ${data.webhookError}`);
+      } else if (data?.webhookReRegistered && data?.webhookSecretConfigured) {
+        toast.success(
+          'Тестовое сообщение отправлено. Webhook и секрет синхронизированы с Telegram — команды /id и /start должны работать.'
+        );
+      } else if (data?.webhookReRegistered) {
+        toast.success(
+          'Тестовое сообщение отправлено. Webhook обновлён в Telegram — команды /id и /start должны работать.'
+        );
+      } else if (data?.webhookEnsured) {
+        toast.success(
+          'Тестовое сообщение отправлено. Webhook уже был настроен — проверьте /id и /start в боте.'
+        );
+      } else {
+        toast.success('Тестовое сообщение отправлено — проверьте Telegram');
+      }
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Не удалось отправить');
+    } finally {
+      setTelegramTestLoading(false);
     }
   };
 
@@ -188,6 +245,46 @@ export default function ProfilePage() {
               <Label htmlFor="email">Email</Label>
               <Input id="email" value={email} onChange={(e) => setEmail(e.target.value)} />
             </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="telegramChatId">Telegram Chat ID</Label>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <Input
+                id="telegramChatId"
+                className="sm:flex-1"
+                inputMode="numeric"
+                placeholder="например 123456789"
+                value={telegramChatId}
+                onChange={(e) => setTelegramChatId(e.target.value)}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                className="shrink-0 sm:w-auto"
+                disabled={telegramTestLoading}
+                onClick={() => void sendTelegramTest()}
+              >
+                {telegramTestLoading ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : null}
+                Тестовое уведомление
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Нужен <strong className="font-medium">ваш</strong> личный числовой ID (чат с человеком), а не ID бота.
+              Удобнее всего: если настроен webhook для бота с{' '}
+              <code className="text-[0.8rem]">TELEGRAM_USER_BOT_TOKEN</code>, напишите ему{' '}
+              <span className="whitespace-nowrap">/id</span> или <span className="whitespace-nowrap">/start</span> — бот
+              пришлёт число для вставки сюда. Иначе можно узнать ID через @userinfobot (не путайте с ID бота из
+              ответа). Тест «Тестовое уведомление» использует значение в поле; если поле пустое — сохранённый ID.
+              {profile?.telegramUserBotWebhookSecretEnabled ? (
+                <>
+                  {' '}
+                  На сервере включён секрет webhook: каждый тест заново передаёт его в Telegram (ручной POST не нужен).
+                </>
+              ) : null}
+            </p>
           </div>
         </CardContent>
         <CardFooter className="flex justify-end">

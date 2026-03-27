@@ -3,9 +3,16 @@
  * Требует TELEGRAM_BOT_TOKEN и TELEGRAM_ADMIN_CHAT_ID в .env.local.
  */
 
+import path from 'path';
+import { readFile } from 'fs/promises';
 import { env } from '@/lib/env';
+import { logTelegramUserBot } from '@/lib/telegram-user-bot-log';
 
 const TELEGRAM_API_TIMEOUT_MS = 10_000;
+/** Лимит подписи к фото в Telegram Bot API */
+const TELEGRAM_PHOTO_CAPTION_MAX = 1024;
+/** Максимальный размер файла для sendPhoto */
+const TELEGRAM_PHOTO_MAX_BYTES = 10 * 1024 * 1024;
 
 /**
  * Шаблоны «мусорного» текста в сообщениях yt-dlp, который не несёт полезной информации
@@ -96,5 +103,123 @@ export async function sendTelegramAdminNotification(text: string, dedupKey?: str
     clearTimeout(timer);
   } catch {
     // Не прерываем основной поток при сбое доставки
+  }
+}
+
+export function escapeHtmlTelegram(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
+ * Уведомление пользователю через отдельного бота (`TELEGRAM_USER_BOT_TOKEN`).
+ * Пользователь должен написать /start этому боту, иначе доставка не сработает.
+ */
+export async function sendTelegramUserNotification(chatId: string, htmlBody: string): Promise<void> {
+  const token = env.telegramUserBotToken().trim();
+  if (!token || !chatId.trim()) return;
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TELEGRAM_API_TIMEOUT_MS);
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId.trim(),
+        text: htmlBody,
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    const data = (await res.json().catch(() => null)) as { ok?: boolean; description?: string } | null;
+    if (!res.ok || !data?.ok) {
+      logTelegramUserBot('error', 'subscription_notify_failed', {
+        chatId: chatId.trim(),
+        status: res.status,
+        description: data?.description ?? null,
+      });
+    } else {
+      logTelegramUserBot('info', 'subscription_notify_ok', { chatId: chatId.trim() });
+    }
+  } catch (e: unknown) {
+    logTelegramUserBot('error', 'subscription_notify_exception', {
+      chatId: chatId.trim(),
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+}
+
+function telegramPhotoMimeAndName(absPath: string): { mime: string; filename: string } {
+  const ext = path.extname(absPath).toLowerCase();
+  if (ext === '.png') return { mime: 'image/png', filename: 'thumb.png' };
+  if (ext === '.webp') return { mime: 'image/webp', filename: 'thumb.webp' };
+  return { mime: 'image/jpeg', filename: 'thumb.jpg' };
+}
+
+function truncateTelegramCaption(html: string): string {
+  if (html.length <= TELEGRAM_PHOTO_CAPTION_MAX) return html;
+  return html.slice(0, TELEGRAM_PHOTO_CAPTION_MAX - 1) + '…';
+}
+
+/**
+ * Уведомление пользователю с превью (локальный файл на диске сервера).
+ * Если файла нет, чтение не удалось или API вернул ошибку — отправляется обычное текстовое сообщение.
+ */
+export async function sendTelegramUserNotificationWithPhoto(
+  chatId: string,
+  htmlBody: string,
+  photoAbsPath: string | null
+): Promise<void> {
+  const token = env.telegramUserBotToken().trim();
+  if (!token || !chatId.trim()) return;
+
+  if (!photoAbsPath) {
+    await sendTelegramUserNotification(chatId, htmlBody);
+    return;
+  }
+
+  try {
+    const buf = await readFile(photoAbsPath);
+    if (buf.length < 32 || buf.length > TELEGRAM_PHOTO_MAX_BYTES) {
+      await sendTelegramUserNotification(chatId, htmlBody);
+      return;
+    }
+
+    const { mime, filename } = telegramPhotoMimeAndName(photoAbsPath);
+    const caption = truncateTelegramCaption(htmlBody);
+    const form = new FormData();
+    form.append('chat_id', chatId.trim());
+    form.append('photo', new Blob([buf], { type: mime }), filename);
+    form.append('caption', caption);
+    form.append('parse_mode', 'HTML');
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TELEGRAM_API_TIMEOUT_MS);
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+      method: 'POST',
+      body: form,
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+
+    const data = (await res.json().catch(() => null)) as { ok?: boolean; description?: string } | null;
+    if (!res.ok || !data?.ok) {
+      logTelegramUserBot('warn', 'subscription_notify_photo_failed_fallback', {
+        chatId: chatId.trim(),
+        status: res.status,
+        description: data?.description ?? null,
+      });
+      await sendTelegramUserNotification(chatId, htmlBody);
+      return;
+    }
+    logTelegramUserBot('info', 'subscription_notify_photo_ok', { chatId: chatId.trim() });
+  } catch (e: unknown) {
+    logTelegramUserBot('warn', 'subscription_notify_photo_exception_fallback', {
+      chatId: chatId.trim(),
+      error: e instanceof Error ? e.message : String(e),
+    });
+    await sendTelegramUserNotification(chatId, htmlBody);
   }
 }

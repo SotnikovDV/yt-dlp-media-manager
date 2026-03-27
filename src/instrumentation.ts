@@ -16,5 +16,7 @@ export async function register() {
 
     const { ensureQueueWorker } = await import('@/lib/queue-worker');
     void ensureQueueWorker();
+
+    void import('@/lib/telegram-user-bot-poller').then((m) => m.startTelegramUserBotPollerIfEnabled());
   }
 }

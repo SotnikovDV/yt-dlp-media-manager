@@ -533,9 +533,17 @@ export function VideoCard<T extends VideoCardVideo>({
                       const posterUrl = thumbnailSrc
                         ? `${origin}${thumbnailSrc}`
                         : undefined;
+                      const contentType =
+                        video.format === 'webm'
+                          ? 'video/webm'
+                          : video.format === 'mkv'
+                            ? 'video/x-matroska'
+                            : 'video/mp4';
                       try {
                         await chromecast.castMedia({
                           contentId: streamUrl,
+                          contentType:
+                            contentType as 'video/mp4' | 'video/webm' | 'video/x-matroska',
                           title: video.title,
                           posterUrl,
                         });

@@ -10,7 +10,9 @@ import { downloadAndSaveChannelAvatar } from '@/lib/avatars';
 import { downloadAndSaveVideoThumbnail } from '@/lib/thumbnails';
 import { checkSubscription } from '@/lib/subscription-checker';
 import { writeQueueLog } from '@/lib/queue-logger';
-import { sendTelegramAdminNotification } from '@/lib/telegram';
+import { escapeHtmlTelegram, sendTelegramAdminNotification, sendTelegramUserNotificationWithPhoto } from '@/lib/telegram';
+import { createWatchLoginToken } from '@/lib/watch-login-token';
+import { getLocalVideoThumbnailAbsPath } from '@/lib/video-local-thumbnail-path';
 import { cleanOldVideosForSubscription } from '@/lib/subscription-clean-old';
 import { getTagsForVideo } from '@/lib/read-info-chapters';
 import { syncVideoTagsFromNames } from '@/lib/sync-video-tags';
@@ -322,7 +324,7 @@ async function tick() {
         db.downloadTask.findFirst({
           where: { status: 'pending' },
           orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
-          include: { subscription: true },
+          include: { subscription: { include: { channel: true } } },
         })
       );
 
@@ -501,6 +503,50 @@ async function tick() {
                 // не ломаем завершение задачи при ошибке синхронизации тегов
                 writeQueueLog('warn', 'sync-tags-failed', { taskId: task.id, videoId, error: String((tagErr as Error).message) });
               }
+
+              if (
+                task.subscriptionId &&
+                task.subscription &&
+                task.isAutoSubscriptionTask &&
+                task.subscription.notifyOnNewVideos &&
+                env.telegramUserBotToken().trim()
+              ) {
+                void (async () => {
+                  const [user, videoRow] = await Promise.all([
+                    db.user.findUnique({
+                      where: { id: task.subscription!.userId },
+                      select: { telegramChatId: true },
+                    }),
+                    db.video.findUnique({
+                      where: { id: videoId },
+                      select: { title: true, thumbnailPath: true, filePath: true, platformId: true },
+                    }),
+                  ]);
+                  const chatId = user?.telegramChatId?.trim();
+                  if (!chatId) return;
+                  const base = env.baseUrl().replace(/\/$/, '');
+                  let watchUrl: string;
+                  try {
+                    const t = createWatchLoginToken(task.subscription!.userId, videoId);
+                    const watchPath = `/api/auth/watch-link?t=${encodeURIComponent(t)}`;
+                    watchUrl = `${base}${watchPath}`.replace(/&/g, '&amp;');
+                  } catch {
+                    const watchPath = `/watch/${videoId}`;
+                    watchUrl = `${base}${watchPath}`.replace(/&/g, '&amp;');
+                  }
+                  const channelTitle = escapeHtmlTelegram(task.subscription!.channel.name);
+                  const videoTitle = escapeHtmlTelegram(videoRow?.title?.trim() || task.title?.trim() || 'Видео');
+                  const html = `📺 <b>Новые видео</b> на канале «${channelTitle}»\n\n<a href="${watchUrl}">${videoTitle}</a>`;
+                  const thumbPath = videoRow
+                    ? await getLocalVideoThumbnailAbsPath({
+                        thumbnailPath: videoRow.thumbnailPath,
+                        filePath: videoRow.filePath,
+                        platformId: videoRow.platformId,
+                      })
+                    : null;
+                  await sendTelegramUserNotificationWithPhoto(chatId, html, thumbPath);
+                })();
+              }
             }
             writeQueueLog('info', 'completed', { taskId: task.id, filePath: pathToStore });
             return;
@@ -544,6 +590,10 @@ export function ensureQueueWorker(): Promise<void> {
   if (state.started) return Promise.resolve();
 
   state.started = true;
+
+  void import('@/lib/telegram-user-bot-poller').then((m) => {
+    m.startTelegramUserBotPollerIfEnabled();
+  });
 
   // После перезапуска сервера задачи в downloading/processing остаются в БД, но процесса уже нет.
   // Сбрасываем их в pending, затем уже запускаем интервал — так меньше конкуренции за SQLite.

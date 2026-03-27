@@ -29,6 +29,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { HelpDocLink } from '@/components/help-doc-link';
 import { withAudioDownloadSlot } from '@/lib/client-audio-download-queue';
 import { fetchAndSavePreparedAudio } from '@/lib/prepared-audio-download';
 
@@ -368,7 +369,10 @@ export function VideoDescriptionDialog(props: VideoDescriptionDialogProps) {
         <div className="mt-2 text-sm text-foreground whitespace-pre-wrap overflow-y-auto min-h-0 pr-1">
           {renderDescription(description, onSeekToTimeInSeconds)}
         </div>
-        <div className="mt-4 flex justify-end">
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+          <HelpDocLink section="player" className="text-xs font-normal text-muted-foreground">
+            Справка: видеоплеер
+          </HelpDocLink>
           <DialogClose asChild>
             <Button type="button" variant="outline" size="sm">
               Закрыть

@@ -28,6 +28,8 @@ export async function GET(
         channel: true,
         watchHistory: userId ? { where: { userId }, take: 1 } : false,
         favorites: userId ? { where: { userId }, take: 1 } : false,
+        bookmarks: userId ? { where: { userId }, take: 1 } : false,
+        pins: userId ? { where: { userId }, take: 1 } : false,
         videoTags: {
           include: { tag: true }
         }

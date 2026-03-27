@@ -118,6 +118,8 @@ export async function POST(request: NextRequest) {
       checkInterval = env.defaultCheckInterval(),
       categoryId,
       autoDeleteDays,
+      notifyOnNewVideos,
+      isPublic,
     } = body;
 
     if (!channelUrl) {
@@ -203,6 +205,8 @@ export async function POST(request: NextRequest) {
         outputFolder,
         checkInterval,
         isActive: true,
+        ...(typeof notifyOnNewVideos === 'boolean' ? { notifyOnNewVideos } : {}),
+        ...(typeof isPublic === 'boolean' ? { isPublic } : {}),
         ...(categoryId ? { categoryId } : {}),
       },
       include: { channel: true, category: true }

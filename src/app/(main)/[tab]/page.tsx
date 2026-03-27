@@ -58,6 +58,7 @@ import {
   Star,
   CalendarClock,
   ListPlus,
+  Info,
   Pin,
   Share2,
   LayoutGrid,
@@ -122,7 +123,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { VideoPlayer } from "@/components/video-player";
+import { VideoPlayer, hasVideoInfoPanelContent } from "@/components/video-player";
 import {
   DndContext,
   type DragEndEvent,
@@ -156,6 +157,7 @@ import {
   VideoDescriptionDialog,
   type VideoDescriptionActions,
 } from "@/components/video-description-dialog";
+import { HelpDocLink } from "@/components/help-doc-link";
 import type {
   PlaybackQueueContext,
   PlaybackQueueSource,
@@ -219,6 +221,7 @@ interface SubscriptionType {
   preferredQuality: string | null;
   isActive: boolean;
   isPublic?: boolean;
+  notifyOnNewVideos?: boolean;
   checkInterval: number;
   lastCheckAt: Date | null;
   categoryId?: string | null;
@@ -675,6 +678,8 @@ const api = {
       preferredQuality?: string;
       categoryId?: string;
       autoDeleteDays?: number;
+      isPublic?: boolean;
+      notifyOnNewVideos?: boolean;
     }) => {
       const res = await fetch("/api/subscriptions", {
         method: "POST",
@@ -691,6 +696,7 @@ const api = {
         categoryId?: string | null;
         autoDeleteDays?: number;
         isPublic?: boolean;
+        notifyOnNewVideos?: boolean;
       },
     ) => {
       const res = await fetch(`/api/subscriptions/${id}`, {
@@ -997,11 +1003,17 @@ function MediaManagerContent() {
     completed: boolean;
   } | null>(null);
   const [videoControlsVisible, setVideoControlsVisible] = useState(true);
+  const [playerInfoPanelOpen, setPlayerInfoPanelOpen] = useState(false);
   const [playerChapters, setPlayerChapters] = useState<
     { startTime: number; endTime: number; title: string }[] | undefined
   >(undefined);
   const playingVideoRef = useRef<VideoType | null>(null);
   playingVideoRef.current = playingVideo;
+
+  useEffect(() => {
+    setPlayerInfoPanelOpen(false);
+  }, [playingVideo?.id]);
+
   /** Если true — следующий запуск useEffect загрузки watchPosition пропускает fetch (позиция уже задана через setTrack) */
   const skipWatchPositionLoadRef = useRef(false);
   const { mode: globalPlayerMode, currentTrack } = useGlobalPlayerState();
@@ -1076,6 +1088,7 @@ function MediaManagerContent() {
     setPlayingVideo(null);
     setPlaybackQueueContext(null);
     setStreamError(null);
+    setPlayerInfoPanelOpen(false);
     lastSavedPositionRef.current = null;
   }, [isDesktop, session?.user]);
 
@@ -1426,6 +1439,8 @@ function MediaManagerContent() {
   const [subscriptionAutoDeleteDays, setSubscriptionAutoDeleteDays] =
     useState(30);
   const [subscriptionQuality, setSubscriptionQuality] = useState("best");
+  const [subscriptionIsPublic, setSubscriptionIsPublic] = useState(false);
+  const [subscriptionNotifyOnNew, setSubscriptionNotifyOnNew] = useState(false);
 
   // Контент страницы подставляется внутрь слота мобильного меню `AppShell`
   // через createPortal (нужно, чтобы обработчики оставались в этой странице).
@@ -1459,6 +1474,8 @@ function MediaManagerContent() {
     string | null
   >(null);
   const [editSubscriptionIsPublic, setEditSubscriptionIsPublic] =
+    useState(false);
+  const [editSubscriptionNotifyOnNew, setEditSubscriptionNotifyOnNew] =
     useState(false);
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -1576,6 +1593,86 @@ function MediaManagerContent() {
       setLibraryOpenedRecentSection(null);
     }
   }, [searchParams, pathname]);
+
+  // Диалог карточки видео по ?openVideo= (переход «DVStream» с /watch после magic-link)
+  useEffect(() => {
+    const openVideoId = searchParams.get("openVideo");
+    if (pathname !== "/library" || !openVideoId) return;
+    const querySnapshot = searchParams.toString();
+    const ac = new AbortController();
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/videos/${encodeURIComponent(openVideoId)}`,
+          { signal: ac.signal },
+        );
+        if (!res.ok) return;
+        const v = (await res.json()) as {
+          id: string;
+          title: string;
+          description?: string | null;
+          platformId?: string;
+          duration?: number | null;
+          thumbnailUrl?: string | null;
+          filePath?: string | null;
+          fileSize?: string | number | bigint | null;
+          publishedAt?: string | Date | null;
+          channel?: {
+            id: string;
+            name: string;
+            avatarUrl?: string | null;
+          } | null;
+          favorites?: VideoCardVideo["favorites"];
+          bookmarks?: VideoCardVideo["bookmarks"];
+          pins?: VideoCardVideo["pins"];
+          format?: string | null;
+        };
+        const fileSize =
+          v.fileSize == null
+            ? null
+            : typeof v.fileSize === "bigint"
+              ? v.fileSize
+              : BigInt(String(v.fileSize));
+        const card: VideoCardVideo = {
+          id: v.id,
+          title: v.title,
+          duration: v.duration ?? null,
+          thumbnailUrl: v.thumbnailUrl ?? null,
+          filePath: v.filePath ?? null,
+          fileSize,
+          publishedAt: v.publishedAt ?? null,
+          channel: v.channel
+            ? {
+                id: v.channel.id,
+                name: v.channel.name,
+                avatarUrl: v.channel.avatarUrl ?? null,
+              }
+            : null,
+          favorites: v.favorites,
+          bookmarks: v.bookmarks,
+          pins: v.pins,
+          platformId: v.platformId,
+          description: v.description ?? null,
+          format: v.format ?? null,
+        };
+        setDescriptionDialogVideo({
+          id: card.id,
+          title: card.title,
+          description: card.description ?? "",
+          platformId: card.platformId ?? "",
+          video: card,
+        });
+        setIsDescriptionDialogOpen(true);
+        const params = new URLSearchParams(querySnapshot);
+        params.delete("openVideo");
+        const next = params.toString();
+        router.replace(next ? `/library?${next}` : "/library");
+      } catch {
+        /* aborted */
+      }
+    })();
+    return () => ac.abort();
+  }, [pathname, searchParams, router]);
 
   // Сворачивание секций медиатеки (состояние в localStorage). Аккордеон: только одна группа развёрнута.
   const LIBRARY_SECTIONS_STORAGE_KEY = "yd-mm-library-sections-collapsed";
@@ -1917,6 +2014,9 @@ function MediaManagerContent() {
   const [deleteTagId, setDeleteTagId] = useState<string | null>(null);
   const [editTagId, setEditTagId] = useState<string | null>(null);
   const [editTagName, setEditTagName] = useState("");
+  const [deletePlaylistId, setDeletePlaylistId] = useState<string | null>(null);
+  const [editPlaylistId, setEditPlaylistId] = useState<string | null>(null);
+  const [editPlaylistName, setEditPlaylistName] = useState("");
 
   // Сброс номера страницы при смене канала, категории, плейлиста, тега, секции "Последних" или поискового запроса
   useEffect(() => {
@@ -2430,6 +2530,8 @@ function MediaManagerContent() {
         downloadDays: subscriptionDays,
         preferredQuality: subscriptionQuality,
         autoDeleteDays: subscriptionAutoDeleteDays,
+        isPublic: subscriptionIsPublic,
+        notifyOnNewVideos: subscriptionNotifyOnNew,
         ...(newSubscriptionCategoryId
           ? { categoryId: newSubscriptionCategoryId }
           : {}),
@@ -2540,6 +2642,46 @@ function MediaManagerContent() {
     },
   });
 
+  const updatePlaylistMutation = useMutation({
+    mutationFn: async () => {
+      if (!editPlaylistId) return;
+      const name = editPlaylistName.trim();
+      if (!name) {
+        throw new Error("Название плейлиста не может быть пустым");
+      }
+      await api.playlists.update(editPlaylistId, { name });
+    },
+    onSuccess: () => {
+      toast.success("Плейлист обновлён");
+      setEditPlaylistId(null);
+      setEditPlaylistName("");
+      queryClient.invalidateQueries({ queryKey: ["playlists"] });
+    },
+    onError: (e: Error) => {
+      toast.error(`Не удалось обновить плейлист: ${e.message}`);
+    },
+  });
+
+  const deletePlaylistMutation = useMutation({
+    mutationFn: (id: string) => api.playlists.delete(id),
+    onSuccess: (_data, id) => {
+      toast.success("Плейлист удалён");
+      setDeletePlaylistId(null);
+      if (libraryOpenedPlaylistId === id) {
+        setLibraryOpenedPlaylistId(null);
+        const params = new URLSearchParams(searchParams.toString());
+        params.delete("playlistId");
+        const query = params.toString();
+        router.replace(`/library${query ? `?${query}` : ""}`);
+      }
+      if (expandedPlaylistId === id) setExpandedPlaylistId(null);
+      queryClient.invalidateQueries({ queryKey: ["playlists"] });
+    },
+    onError: (e: Error) => {
+      toast.error(`Не удалось удалить плейлист: ${e.message}`);
+    },
+  });
+
   const clearVideosMutation = useMutation({
     mutationFn: () =>
       api.videos.clear(
@@ -2591,6 +2733,7 @@ function MediaManagerContent() {
         categoryId: editSubscriptionCategoryId || null,
         autoDeleteDays: editSubscriptionAutoDeleteDays,
         isPublic: editSubscriptionIsPublic,
+        notifyOnNewVideos: editSubscriptionNotifyOnNew,
       }),
     onSuccess: () => {
       toast.success("Подписка обновлена");
@@ -3223,9 +3366,36 @@ function MediaManagerContent() {
               {libraryOpenedPlaylistId &&
                 openedPlaylist &&
                 !libraryOpenedFavorites && (
-                  <h2 className="text-lg font-semibold">
-                    Плейлист: {openedPlaylist.name}
-                  </h2>
+                  <div className="flex items-center justify-between gap-2">
+                    <h2 className="text-lg font-semibold truncate">
+                      Плейлист: {openedPlaylist.name}
+                    </h2>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="text-muted-foreground hover:text-foreground"
+                        title="Переименовать плейлист"
+                        onClick={() => {
+                          setEditPlaylistId(libraryOpenedPlaylistId);
+                          setEditPlaylistName(openedPlaylist.name);
+                        }}
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="text-destructive hover:text-destructive"
+                        title="Удалить плейлист"
+                        onClick={() =>
+                          setDeletePlaylistId(libraryOpenedPlaylistId)
+                        }
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
                 )}
               {librarySelectedChannelId &&
                 !libraryOpenedCategoryKey &&
@@ -3419,6 +3589,9 @@ function MediaManagerContent() {
                                     );
                                     setEditSubscriptionIsPublic(
                                       !!sub.isPublic,
+                                    );
+                                    setEditSubscriptionNotifyOnNew(
+                                      !!sub.notifyOnNewVideos,
                                     );
                                   }}
                                 >
@@ -5252,23 +5425,24 @@ function MediaManagerContent() {
                               <Button
                                 size="sm"
                                 variant="ghost"
+                                className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
+                                title="Переименовать плейлист"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditPlaylistId(pl.id);
+                                  setEditPlaylistName(pl.name);
+                                }}
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
                                 className="h-8 w-8 p-0 text-destructive hover:text-destructive"
                                 title="Удалить плейлист"
-                                onClick={async (e) => {
+                                onClick={(e) => {
                                   e.stopPropagation();
-                                  if (
-                                    window.confirm(
-                                      `Удалить плейлист «${pl.name}»?`,
-                                    )
-                                  ) {
-                                    await api.playlists.delete(pl.id);
-                                    queryClient.invalidateQueries({
-                                      queryKey: ["playlists"],
-                                    });
-                                    if (expandedPlaylistId === pl.id)
-                                      setExpandedPlaylistId(null);
-                                    toast.success("Плейлист удалён");
-                                  }
+                                  setDeletePlaylistId(pl.id);
                                 }}
                               >
                                 <Trash2 className="h-4 w-4" />
@@ -5765,6 +5939,9 @@ function MediaManagerContent() {
                                     setEditSubscriptionIsPublic(
                                       !!sub.isPublic,
                                     );
+                                    setEditSubscriptionNotifyOnNew(
+                                      !!sub.notifyOnNewVideos,
+                                    );
                                   }}
                                 >
                                   <Pencil className="h-4 w-4" />
@@ -6087,6 +6264,9 @@ function MediaManagerContent() {
                                           setEditSubscriptionIsPublic(
                                             !!sub.isPublic,
                                           );
+                                          setEditSubscriptionNotifyOnNew(
+                                            !!sub.notifyOnNewVideos,
+                                          );
                                         }}
                                       >
                                         <Pencil className="h-4 w-4" />
@@ -6102,9 +6282,9 @@ function MediaManagerContent() {
                                         <Trash2 className="h-4 w-4" />
                                       </Button>
                                     </CardFooter>
-                                  </Card>
-                                );
-                              })}
+                              </Card>
+                            );
+                          })}
                             </div>
                             <div className="mt-4 flex justify-center">
                               <Button
@@ -7726,6 +7906,48 @@ function MediaManagerContent() {
                     ? `${playingVideo.title.slice(0, 75)}…`
                     : playingVideo.title}
                 </span>
+                {hasVideoInfoPanelContent(
+                  playingVideo.description,
+                  playingVideo.platformId
+                    ? `https://www.youtube.com/watch?v=${playingVideo.platformId}`
+                    : null,
+                  {
+                    share: {
+                      videoId: playingVideo.id,
+                      title: playingVideo.title,
+                      baseUrl:
+                        (stats as StatsType)?.baseUrl ??
+                        (typeof window !== "undefined"
+                          ? window.location.origin
+                          : ""),
+                    },
+                    ...(playingVideo.filePath && {
+                      download: {
+                        videoId: playingVideo.id,
+                        title: playingVideo.title,
+                        platformId: playingVideo.platformId,
+                      },
+                    }),
+                  },
+                ) && (
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className={cn(
+                      "h-8 w-8 shrink-0 cursor-pointer",
+                      playerInfoPanelOpen && "bg-muted",
+                    )}
+                    title="Описание видео"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setPlayerInfoPanelOpen((o) => !o);
+                    }}
+                  >
+                    <Info className="h-4 w-4" />
+                  </Button>
+                )}
                 {session?.user && (
                   <Button
                     size="icon"
@@ -8113,6 +8335,7 @@ function MediaManagerContent() {
                           ? `/api/thumbnail/${playingVideo.id}`
                           : undefined
                       }
+                      format={playingVideo.format ?? undefined}
                       publishedAt={playingVideo.publishedAt ?? undefined}
                       initialTime={
                         currentTrack &&
@@ -8131,6 +8354,11 @@ function MediaManagerContent() {
                       }
                       initialFullscreen={playbackSettings.mode === "fullscreen"}
                       fillContainer={isDesktop}
+                      hideInternalWindowedToolbar
+                      infoOpen={isDesktop ? playerInfoPanelOpen : undefined}
+                      onInfoOpenChange={
+                        isDesktop ? setPlayerInfoPanelOpen : undefined
+                      }
                       chapters={playerChapters}
                       onControlsVisibilityChange={setVideoControlsVisible}
                       onPositionSave={
@@ -8443,8 +8671,13 @@ function MediaManagerContent() {
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Скачать видео</DialogTitle>
-            <DialogDescription>
-              Вставьте ссылку на видео с YouTube или другой платформы
+            <DialogDescription className="space-y-2">
+              <span className="block">
+                Вставьте ссылку на видео с YouTube или другой платформы
+              </span>
+              <HelpDocLink section="download" className="text-xs font-normal text-muted-foreground">
+                Справка: скачивание видео
+              </HelpDocLink>
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -8534,6 +8767,8 @@ function MediaManagerContent() {
             // Полный сброс состояния формы
             setSubscriptionUrl("");
             setNewSubscriptionCategoryId(null);
+            setSubscriptionIsPublic(false);
+            setSubscriptionNotifyOnNew(false);
 
             // Инициализация значениями по умолчанию из настроек
             const days = Number(settings?.defaultSubscriptionHistoryDays ?? 30);
@@ -8565,8 +8800,16 @@ function MediaManagerContent() {
               <DialogTitle className="text-base font-semibold text-slate-800 dark:text-slate-200">
                 Добавить подписку
               </DialogTitle>
-              <DialogDescription className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
-                Введите ссылку на канал для автоматического скачивания новых видео
+              <DialogDescription className="mt-0.5 space-y-2 text-xs text-slate-400 dark:text-slate-500">
+                <span className="block">
+                  Введите ссылку на канал для автоматического скачивания новых видео
+                </span>
+                <HelpDocLink
+                  section="subscriptions"
+                  className="text-xs font-normal text-slate-500 hover:text-primary dark:text-slate-400"
+                >
+                  Справка: подписки на каналы
+                </HelpDocLink>
               </DialogDescription>
             </div>
             <DialogClose className="absolute top-4 right-4 mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300">
@@ -8711,6 +8954,37 @@ function MediaManagerContent() {
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+            <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-600 dark:bg-slate-800/50">
+              <div>
+                <p className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                  Публичная подписка
+                </p>
+                <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
+                  Другие пользователи смогут добавить её себе
+                </p>
+              </div>
+              <Switch
+                id="new-sub-public"
+                checked={subscriptionIsPublic}
+                onCheckedChange={setSubscriptionIsPublic}
+              />
+            </div>
+            <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-600 dark:bg-slate-800/50">
+              <div>
+                <p className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                  Уведомлять о новых
+                </p>
+                <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
+                  В Telegram при появлении новых видео в очереди (нужен Chat ID в профиле и бот{" "}
+                  <code className="text-[0.7rem]">TELEGRAM_USER_BOT_TOKEN</code>)
+                </p>
+              </div>
+              <Switch
+                id="new-sub-notify-new"
+                checked={subscriptionNotifyOnNew}
+                onCheckedChange={setSubscriptionNotifyOnNew}
+              />
             </div>
           </div>
           <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/60 px-6 py-4 dark:border-slate-800 dark:bg-slate-800/30">
@@ -8956,6 +9230,22 @@ function MediaManagerContent() {
                 onCheckedChange={setEditSubscriptionIsPublic}
               />
             </div>
+            <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-600 dark:bg-slate-800/50">
+              <div>
+                <p className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                  Уведомлять о новых
+                </p>
+                <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
+                  В Telegram при появлении новых видео в очереди (нужен Chat ID в профиле и бот{" "}
+                  <code className="text-[0.7rem]">TELEGRAM_USER_BOT_TOKEN</code>)
+                </p>
+              </div>
+              <Switch
+                id="edit-sub-notify-new"
+                checked={editSubscriptionNotifyOnNew}
+                onCheckedChange={setEditSubscriptionNotifyOnNew}
+              />
+            </div>
           </div>
           <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/60 px-6 py-4 dark:border-slate-800 dark:bg-slate-800/30">
             <Button
@@ -9032,6 +9322,35 @@ function MediaManagerContent() {
               {librarySelectedChannelId === LIBRARY_INDIVIDUAL_CHANNEL_ID
                 ? "Убрать"
                 : "Удалить"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Подтверждение удаления плейлиста */}
+      <AlertDialog
+        open={!!deletePlaylistId}
+        onOpenChange={() => setDeletePlaylistId(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Удалить плейлист?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Плейлист будет удалён. Сами видео в библиотеке останутся.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (deletePlaylistId) {
+                  deletePlaylistMutation.mutate(deletePlaylistId);
+                }
+              }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deletePlaylistMutation.isPending}
+            >
+              Удалить
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -9281,6 +9600,67 @@ function MediaManagerContent() {
               disabled={updateTagMutation.isPending || !editTagName.trim()}
             >
               {updateTagMutation.isPending ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Сохранение...
+                </>
+              ) : (
+                "Сохранить"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Диалог редактирования плейлиста */}
+      <Dialog
+        open={!!editPlaylistId}
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditPlaylistId(null);
+            setEditPlaylistName("");
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Редактировать плейлист</DialogTitle>
+            <DialogDescription>
+              Измените название плейлиста. В будущем здесь можно будет менять и
+              другие параметры.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label htmlFor="edit-playlist-name">Название плейлиста</Label>
+              <Input
+                id="edit-playlist-name"
+                value={editPlaylistName}
+                onChange={(e) => setEditPlaylistName(e.target.value)}
+                autoFocus
+                placeholder="Например: Cursor"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setEditPlaylistId(null);
+                setEditPlaylistName("");
+              }}
+            >
+              Отмена
+            </Button>
+            <Button
+              type="button"
+              onClick={() => updatePlaylistMutation.mutate()}
+              disabled={
+                updatePlaylistMutation.isPending || !editPlaylistName.trim()
+              }
+            >
+              {updatePlaylistMutation.isPending ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   Сохранение...

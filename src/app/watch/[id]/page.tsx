@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { db } from '@/lib/db';
-import { VideoPlayer } from '@/components/video-player';
+import { WatchVideoClient } from '@/components/watch-video-client';
 import { env } from '@/lib/env';
 import { getChaptersForVideo } from '@/lib/read-info-chapters';
 import { getDownloadPathAsync } from '@/lib/settings';
@@ -50,10 +50,14 @@ export async function generateMetadata({
 
 export default async function WatchPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ fs?: string }>;
 }) {
   const { id } = await params;
+  const sp = await searchParams;
+  const initialFullscreen = sp.fs === '1' || sp.fs === 'true';
 
   try {
     const video = await db.video.findUnique({
@@ -80,15 +84,19 @@ export default async function WatchPage({
 
     return (
       <div className="min-h-screen bg-black flex flex-col items-center justify-center p-4">
-        <div className="w-full max-w-5xl aspect-video bg-black py-8 relative">
-          <VideoPlayer
-            src={`/api/stream/${resolved.id}`}
-            title={resolved.title}
+        <div className="w-full max-w-5xl aspect-video bg-black py-10 relative">
+          <WatchVideoClient
+            videoId={resolved.id}
             baseUrl={baseUrl}
+            streamSrc={`/api/stream/${resolved.id}`}
+            title={resolved.title}
+            format={resolved.format ?? undefined}
             channelName={resolved.channel?.name ?? undefined}
             channelId={resolved.channel?.id ?? undefined}
             publishedAt={resolved.publishedAt ?? undefined}
             chapters={chapters.length > 0 ? chapters : undefined}
+            poster={`/api/thumbnail/${resolved.id}`}
+            initialFullscreen={initialFullscreen}
           />
         </div>
       </div>

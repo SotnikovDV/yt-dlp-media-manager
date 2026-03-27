@@ -37,10 +37,23 @@ const child = spawn(process.execPath, [serverPath], {
   cwd: root,
 });
 
-// Через 3 с после старта вызываем GET /api/queue, чтобы гарантированно запустить воркер очереди
-// (instrumentation в standalone может не вызываться)
+// Через 3 с после старта: прогрев маршрутов (instrumentation в standalone может не вызываться)
 setTimeout(() => {
   fetch(`http://127.0.0.1:${port}/api/queue`, { method: 'GET' }).catch(() => {});
+  fetch(`http://127.0.0.1:${port}/api/telegram/user-bot-webhook`, { method: 'GET' }).catch(() => {});
 }, 3000);
+
+// Прогрев POST webhook (тот же путь, что у Telegram) — снижает холодный первый запрос и таймауты доставки
+setTimeout(() => {
+  const secret = process.env.TELEGRAM_USER_BOT_WEBHOOK_SECRET?.trim();
+  const hookPath = secret
+    ? `/api/telegram/user-bot-hook/${encodeURIComponent(secret)}`
+    : '/api/telegram/user-bot-webhook';
+  fetch(`http://127.0.0.1:${port}${hookPath}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ update_id: 0 }),
+  }).catch(() => {});
+}, 4500);
 
 child.on('exit', (code) => process.exit(code ?? 0));

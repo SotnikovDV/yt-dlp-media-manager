@@ -31,7 +31,7 @@ function addFfmpegLocation(args: string[]) {
   return [...prefix, ...args];
 }
 
-function isYouTubeUrl(url: string): boolean {
+export function isYouTubeUrl(url: string): boolean {
   try {
     const u = new URL(url);
     return u.hostname.toLowerCase().includes('youtube.com') || u.hostname.toLowerCase().includes('youtu.be');
@@ -48,10 +48,54 @@ function isTransientNetworkError(stderrOrMessage: string): boolean {
     s.includes('connectionreset') ||
     s.includes('connection reset') ||
     s.includes('unable to download') ||
+    s.includes('unable to download api page') ||
     s.includes('econnreset') ||
     s.includes('etimedout') ||
-    s.includes('socket hang up')
+    s.includes('socket hang up') ||
+    s.includes('read timed out') ||
+    s.includes('httpsconnectionpool') ||
+    s.includes('transporterror')
   );
+}
+
+const YT_DLP_OPERATION_MAX_ATTEMPTS = 3;
+const YT_DLP_RETRY_WAIT_MS = [2500, 6000] as const;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Повтор при обрыве/таймауте HTTPS к YouTube (часто read timeout=60 в urllib3 у yt-dlp).
+ */
+async function runYtDlpOperationWithRetries<T>(operationName: string, fn: () => Promise<T>): Promise<T> {
+  let lastErr: Error | undefined;
+  for (let attempt = 1; attempt <= YT_DLP_OPERATION_MAX_ATTEMPTS; attempt++) {
+    if (attempt > 1) {
+      const wait = YT_DLP_RETRY_WAIT_MS[attempt - 2] ?? 6000;
+      console.warn(`[yt-dlp] ${operationName}: pause ${wait}ms before attempt ${attempt}/${YT_DLP_OPERATION_MAX_ATTEMPTS}`);
+      await sleep(wait);
+    }
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e instanceof Error ? e : new Error(String(e));
+      const msg = lastErr.message.toLowerCase();
+      const retryable =
+        isTransientNetworkError(lastErr.message) ||
+        msg.includes('read timed out') ||
+        msg.includes('httpsconnectionpool') ||
+        msg.includes('unable to download api page');
+      if (!retryable || attempt >= YT_DLP_OPERATION_MAX_ATTEMPTS) {
+        throw lastErr;
+      }
+      console.warn(
+        `[yt-dlp] ${operationName}: transient error (attempt ${attempt}/${YT_DLP_OPERATION_MAX_ATTEMPTS}):`,
+        lastErr.message.slice(0, 220)
+      );
+    }
+  }
+  throw lastErr;
 }
 
 /** Строит URL канала YouTube для yt-dlp. platformId может быть UC... или @handle. */
@@ -187,7 +231,9 @@ export async function getVideoInfo(url: string, options?: GetVideoInfoOptions): 
     return cached.value;
   }
 
-  const info = await getVideoInfoUncached(url, options?.fast ?? false);
+  const info = await runYtDlpOperationWithRetries('getVideoInfo', () =>
+    getVideoInfoUncached(url, options?.fast ?? false)
+  );
   videoInfoCache.set(cacheKey, { value: info, expiresAt: Date.now() + VIDEO_INFO_CACHE_TTL_MS });
   return info;
 }
@@ -294,6 +340,12 @@ function normalizeChannelUrl(url: string): string {
 export async function getChannelInfo(url: string): Promise<{ id: string; name: string; description?: string; avatar?: string }> {
   assertHttpUrl(url);
   const normalizedUrl = normalizeChannelUrl(url);
+  return runYtDlpOperationWithRetries('getChannelInfo', () => getChannelInfoInner(normalizedUrl));
+}
+
+function getChannelInfoInner(
+  normalizedUrl: string
+): Promise<{ id: string; name: string; description?: string; avatar?: string }> {
   return new Promise((resolve, reject) => {
     const commonArgs = [
       '--dump-json',
@@ -475,7 +527,7 @@ function getUploadDateStr(v: { upload_date?: string; release_timestamp?: number;
 // 2) Запрашиваем только первые limit записей плейлиста. Предполагается, что для вкладки /videos порядок
 //    «сначала новые» — иначе все limit записей могут оказаться старше dateAfter и нужные видео не попадут в ответ.
 //    Вызывающий код должен задавать достаточный limit (например SUBSCRIPTION_CHECK_VIDEO_LIMIT).
-export async function getChannelVideosSince(
+async function getChannelVideosSinceInner(
   channelUrl: string,
   dateAfter: Date,
   limit: number = 200
@@ -609,6 +661,16 @@ export async function getChannelVideosSince(
 
     run(isYouTubeUrl(videosTabUrl));
   });
+}
+
+export async function getChannelVideosSince(
+  channelUrl: string,
+  dateAfter: Date,
+  limit: number = 200
+): Promise<VideoInfo[]> {
+  return runYtDlpOperationWithRetries('getChannelVideosSince', () =>
+    getChannelVideosSinceInner(channelUrl, dateAfter, limit)
+  );
 }
 
 // Активные процессы скачивания
