@@ -43,10 +43,55 @@ function truncateForTelegramLine(s: string, max: number): string {
   return `${t.slice(0, Math.max(0, max - 1))}…`;
 }
 
+/** Дата публикации для подписи к заголовку в поиске (календарная, Europe/Moscow). */
+function formatVideoPublishedDdMmYy(publishedAt: Date): string {
+  return publishedAt.toLocaleDateString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: '2-digit',
+    timeZone: 'Europe/Moscow',
+  });
+}
+
+/**
+ * Эвристика: в заголовке уже есть явная календарная дата — тогда дату публикации не дублируем.
+ */
+function titleLikelyContainsDate(title: string): boolean {
+  const t = title.trim();
+  if (!t) return false;
+  if (/\d{1,2}[./\\-]\d{1,2}[./\\-]\d{2,4}\b/.test(t)) return true;
+  if (/\b\d{4}[./\\-]\d{1,2}[./\\-]\d{1,2}\b/.test(t)) return true;
+  if (
+    /\d{1,2}\s+(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)(?:\s+\d{2,4})?/i.test(
+      t
+    )
+  )
+    return true;
+  if (
+    /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2},?\s+\d{2,4}\b/i.test(
+      t
+    )
+  )
+    return true;
+  if (/\b\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{2,4}\b/i.test(t))
+    return true;
+  return false;
+}
+
+function telegramSearchVideoDisplayTitle(
+  title: string,
+  publishedAt: Date | null
+): string {
+  const base = title.trim();
+  if (!base) return base;
+  if (publishedAt == null || titleLikelyContainsDate(base)) return base;
+  return `${base} / ${formatVideoPublishedDdMmYy(publishedAt)}`;
+}
+
 function buildVideoSearchReplyHtml(
   base: string,
   query: string,
-  videos: { id: string; title: string }[],
+  videos: { id: string; title: string; publishedAt: Date | null }[],
   total: number
 ): string {
   const root = base.replace(/\/$/, '');
@@ -56,7 +101,8 @@ function buildVideoSearchReplyHtml(
   ];
   for (let i = 0; i < videos.length; i++) {
     const v = videos[i];
-    const title = escapeHtmlTelegram(truncateForTelegramLine(v.title, 120));
+    const lineTitle = telegramSearchVideoDisplayTitle(v.title, v.publishedAt);
+    const title = escapeHtmlTelegram(truncateForTelegramLine(lineTitle, 140));
     const url = `${root}/watch/${encodeURIComponent(v.id)}?fs=1`;
     lines.push(`${i + 1}. <a href="${url}">${title}</a>`);
   }
@@ -267,6 +313,7 @@ export async function processTelegramUserBotUpdate(update: TelegramUserBotUpdate
     query: searchResult.query,
     total: searchResult.total,
     shown: searchResult.videos.length,
+    searchKind: searchResult.searchKind,
   });
 
   if (searchResult.total === 0) {

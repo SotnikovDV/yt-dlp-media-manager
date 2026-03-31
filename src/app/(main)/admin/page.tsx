@@ -37,6 +37,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
+import { HelpDocLink } from '@/components/help-doc-link';
 
 type UserRow = {
   id: string;
@@ -631,19 +632,27 @@ export default function AdminPage() {
                 </div>
               </div>
             </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setCategoryDialogOpen(false)}>
-                Отмена
-              </Button>
-              <Button
-                onClick={saveCategory}
-                disabled={createCategoryMutation.isPending || updateCategoryMutation.isPending}
+            <DialogFooter className="flex-row flex-wrap items-center justify-between gap-3 sm:justify-between">
+              <HelpDocLink
+                section="subscriptions"
+                className="min-w-0 shrink text-xs font-normal text-muted-foreground"
               >
-                {(createCategoryMutation.isPending || updateCategoryMutation.isPending) && (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                )}
-                {editingCategoryId ? 'Сохранить' : 'Создать'}
-              </Button>
+                Справка: подписки и категории
+              </HelpDocLink>
+              <div className="flex shrink-0 gap-2">
+                <Button variant="outline" onClick={() => setCategoryDialogOpen(false)}>
+                  Отмена
+                </Button>
+                <Button
+                  onClick={saveCategory}
+                  disabled={createCategoryMutation.isPending || updateCategoryMutation.isPending}
+                >
+                  {(createCategoryMutation.isPending || updateCategoryMutation.isPending) && (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  )}
+                  {editingCategoryId ? 'Сохранить' : 'Создать'}
+                </Button>
+              </div>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -656,15 +665,23 @@ export default function AdminPage() {
                 Подписки с этой категорией останутся, у них просто снимется привязка к категории.
               </AlertDialogDescription>
             </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Отмена</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={() => deleteCategoryId && deleteCategoryMutation.mutate(deleteCategoryId)}
-                disabled={deleteCategoryMutation.isPending}
-                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            <AlertDialogFooter className="flex-row flex-wrap items-center justify-between gap-3 sm:justify-between">
+              <HelpDocLink
+                section="subscriptions"
+                className="min-w-0 shrink text-xs font-normal text-muted-foreground"
               >
-                Удалить
-              </AlertDialogAction>
+                Справка: подписки и категории
+              </HelpDocLink>
+              <div className="flex shrink-0 flex-wrap gap-2">
+                <AlertDialogCancel>Отмена</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => deleteCategoryId && deleteCategoryMutation.mutate(deleteCategoryId)}
+                  disabled={deleteCategoryMutation.isPending}
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                >
+                  Удалить
+                </AlertDialogAction>
+              </div>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>

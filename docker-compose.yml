@@ -61,6 +61,33 @@ services:
       # - CHROMECAST_DEBUG=1
       # Отладка Chromecast в браузере: вывод в консоль DevTools (F12). Нужна пересборка после изменения
       # - NEXT_PUBLIC_CHROMECAST_DEBUG=1
+      # AI (ключ задайте в .env рядом с compose или в окружении хоста — не коммитьте)
+      - AI_BASE_URL=https://api.perplexity.ai
+      - AI_API_KEY=${AI_API_KEY}
+      - AI_HTTP_TIMEOUT=30
+      # Общие значения по умолчанию для задач (если не заданы *_MODEL / *_TEMPERATURE / *_MAX_TOKENS ниже)
+      - AI_MODEL=sonar
+      - AI_TEMPERATURE=0.5
+      - AI_MAX_TOKENS=1000
+      # Поиск видео по запросу (переопределяют AI_MODEL / AI_TEMPERATURE / AI_MAX_TOKENS для этой задачи)
+      - AI_SEARCH_VIDEO_MODEL=
+      - AI_SEARCH_KEYWORDS_MODEL=
+      - AI_SEARCH_RERANK_MODEL=
+      - AI_SEARCH_VIDEO_TEMPERATURE=
+      - AI_SEARCH_VIDEO_MAX_TOKENS=
+      # Этап ключевых слов: больше max_tokens при reasoning-моделях; не задано — от AI_SEARCH_VIDEO_MAX_TOKENS (мин. 1024 в коде)
+      - AI_SEARCH_KEYWORDS_MAX_TOKENS=
+      # 1 — json_object на этапе ключей. HTTP 400 — 0 или смена модели (см. .env.example: qwen3-32b / llama-3.3-70b).
+      - AI_SEARCH_KEYWORDS_RESPONSE_JSON=
+      # Реранк: json_object; пусто — как KEYWORDS; 0 — выкл. только реранк.
+      - AI_SEARCH_RERANK_RESPONSE_JSON=
+      - AI_SEARCH_RERANK_MAX_TOKENS=
+      # AI-поиск: пул для реранка при >5 совпадений по ключевым словам
+      - AI_SEARCH_V1_RERANK_POOL=36
+      # Максимум id в итоговой выдаче умного поиска (пагинация через ids в API)
+      - AI_SEARCH_SMART_RESULT_CAP=80
+      # После реранка: 1 — добор id из пула ключей до cap; 0 — только список LLM
+      - AI_SEARCH_SMART_APPEND_KEYWORD_POOL=
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/stats').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s

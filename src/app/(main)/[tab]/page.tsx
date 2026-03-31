@@ -65,6 +65,10 @@ import {
   MoreHorizontal,
   Lock,
   Globe,
+  Check,
+  TextSearch,
+  Sparkles,
+  CornerDownLeft,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -112,8 +116,6 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
-import { cn } from "@/lib/utils";
-import { getOmbreGradient } from "@/lib/color-utils";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -122,6 +124,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { cn } from "@/lib/utils";
+import { getOmbreGradient } from "@/lib/color-utils";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { VideoPlayer, hasVideoInfoPanelContent } from "@/components/video-player";
 import {
@@ -438,6 +442,7 @@ const api = {
       page?: number;
       limit?: number;
       search?: string;
+      searchMode?: "classic" | "smart";
       channelId?: string;
       categoryId?: string;
       tagId?: string;
@@ -450,6 +455,7 @@ const api = {
       if (params.limit != null && params.limit > 0)
         query.set("limit", String(params.limit));
       if (params.search) query.set("search", params.search);
+      if (params.searchMode === "smart") query.set("searchMode", "smart");
       if (params.channelId) query.set("channelId", params.channelId);
       if (params.categoryId) query.set("categoryId", params.categoryId);
       if (params.tagId) query.set("tagId", params.tagId);
@@ -457,7 +463,16 @@ const api = {
         query.set("ids", params.ids.join(","));
       if (params.sort) query.set("sort", params.sort);
       const res = await fetch(`/api/videos?${query}`);
-      return res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const err = new Error(
+          (data as { error?: string })?.error || `HTTP ${res.status}`,
+        );
+        (err as { status?: number }).status = res.status;
+        (err as { data?: unknown }).data = data;
+        throw err;
+      }
+      return data;
     },
     sections: async (limit?: number): Promise<LibrarySectionsResponse> => {
       const query = new URLSearchParams();
@@ -1479,6 +1494,18 @@ function MediaManagerContent() {
     useState(false);
 
   const [searchQuery, setSearchQuery] = useState("");
+  /** Режим поиска на /library: обычный (подстрока) или AI. */
+  const [librarySearchMode, setLibrarySearchMode] = useState<
+    "classic" | "smart"
+  >("classic");
+  /** Черновик строки в режиме AI (запрос к API только после «Найти» / Enter). */
+  const [libraryAiDraft, setLibraryAiDraft] = useState("");
+  /** Зафиксированный запрос AI-поиска (совпадает с q в URL после submit). */
+  const [libraryAiCommittedQuery, setLibraryAiCommittedQuery] = useState("");
+  /** Порядок id после умного поиска (страницы 2+); не включаем в queryKey, чтобы не дублировать запрос страницы 1. */
+  const [smartSearchOrderedIds, setSmartSearchOrderedIds] = useState<
+    string[] | null
+  >(null);
   // Медиатека: выбранный канал (показ видео канала) и источник открытия (для кнопки «Назад»)
   const [librarySelectedChannelId, setLibrarySelectedChannelId] = useState<
     string | null
@@ -1518,6 +1545,21 @@ function MediaManagerContent() {
       pathname === "/library" ? (searchParams.get("q") ?? "") : "";
 
     setSearchQuery(qFromUrl);
+    if (pathname === "/library") {
+      const modeSmart = searchParams.get("searchMode") === "smart";
+      setLibrarySearchMode(modeSmart ? "smart" : "classic");
+      if (modeSmart) {
+        // При переключении «обычный → умный» q убирают из URL (поиск только после Enter);
+        // пустой q не должен затирать черновик, уже выставленный в applyLibrarySearchMode.
+        if (qFromUrl) {
+          setLibraryAiDraft(qFromUrl);
+          setLibraryAiCommittedQuery(qFromUrl);
+        }
+      } else {
+        setLibraryAiDraft(qFromUrl);
+        setLibraryAiCommittedQuery("");
+      }
+    }
     if (fromTabFromUrl === "library" || fromTabFromUrl === "subscriptions") {
       setLibraryOpenedFromTab(fromTabFromUrl);
     } else {
@@ -2030,6 +2072,66 @@ function MediaManagerContent() {
     librarySelectedTagId,
     libraryOpenedRecentSection,
     searchQuery,
+    libraryAiCommittedQuery,
+    librarySearchMode,
+  ]);
+
+  const librarySmartSearchSupported =
+    !libraryOpenedFavorites &&
+    !libraryOpenedBookmarks &&
+    !libraryOpenedRecentSection &&
+    !libraryOpenedPlaylistId;
+
+  const effectiveLibrarySearchMode: "classic" | "smart" =
+    librarySmartSearchSupported && librarySearchMode === "smart"
+      ? "smart"
+      : "classic";
+
+  useEffect(() => {
+    setSmartSearchOrderedIds(null);
+  }, [
+    searchQuery,
+    libraryAiCommittedQuery,
+    effectiveLibrarySearchMode,
+    librarySelectedChannelId,
+    libraryOpenedCategoryKey,
+    libraryOpenedFavorites,
+    libraryOpenedBookmarks,
+    librarySelectedTagId,
+    libraryOpenedRecentSection,
+  ]);
+
+  const videosSearchQuery =
+    effectiveLibrarySearchMode === "smart"
+      ? libraryAiCommittedQuery
+      : searchQuery;
+
+  const libraryAiSearchDeferredUi =
+    librarySmartSearchSupported && librarySearchMode === "smart";
+
+  const commitLibraryAiSearch = useCallback(() => {
+    if (!libraryAiSearchDeferredUi) return;
+    const t = libraryAiDraft.trim();
+    setLibraryAiCommittedQuery(t);
+    setLibraryVideosPage(1);
+    setSmartSearchOrderedIds(null);
+    if (pathname === "/library") {
+      const params = new URLSearchParams(searchParams.toString());
+      if (t) params.set("q", t);
+      else params.delete("q");
+      params.set("searchMode", "smart");
+      const query = params.toString();
+      router.replace(
+        query ? `/library?${query}` : "/library",
+        { scroll: false },
+      );
+    }
+  }, [
+    libraryAiDraft,
+    libraryAiSearchDeferredUi,
+    pathname,
+    router,
+    searchParams,
   ]);
 
   // При входе в содержимое подписки/категории/плейлиста/избранного/тега/секции прокручиваем список видео к началу
@@ -2064,7 +2166,68 @@ function MediaManagerContent() {
     libraryOpenedBookmarks ||
     !!librarySelectedTagId ||
     !!libraryOpenedRecentSection ||
-    !!searchQuery;
+    !!videosSearchQuery.trim();
+
+  const { data: featureFlags } = useQuery({
+    queryKey: ["feature-flags"],
+    queryFn: async () => {
+      const r = await fetch("/api/feature-flags");
+      const j = (await r.json()) as { smartSearchAvailable?: boolean };
+      return { smartSearchAvailable: !!j.smartSearchAvailable };
+    },
+    staleTime: 60_000,
+  });
+
+  const applyLibrarySearchMode = useCallback(
+    (v: "classic" | "smart") => {
+      if (v === "smart" && featureFlags && !featureFlags.smartSearchAvailable)
+        return;
+      setLibrarySearchMode(v);
+      if (pathname === "/library") {
+        const params = new URLSearchParams(searchParams.toString());
+        if (v === "smart") {
+          params.set("searchMode", "smart");
+          params.delete("q");
+          setLibraryAiDraft(searchQuery);
+          setLibraryAiCommittedQuery("");
+        } else {
+          params.delete("searchMode");
+          const nextQ =
+            libraryAiDraft.trim() ||
+            libraryAiCommittedQuery.trim() ||
+            searchQuery.trim();
+          setSearchQuery(nextQ);
+          setLibraryAiCommittedQuery("");
+          if (nextQ) params.set("q", nextQ);
+          else params.delete("q");
+        }
+        const query = params.toString();
+        router.replace(query ? `/library?${query}` : "/library", {
+          scroll: false,
+        });
+      }
+    },
+    [
+      featureFlags,
+      pathname,
+      router,
+      searchParams,
+      searchQuery,
+      libraryAiDraft,
+      libraryAiCommittedQuery,
+    ]
+  );
+
+  useEffect(() => {
+    if (!featureFlags || featureFlags.smartSearchAvailable) return;
+    if (pathname !== "/library") return;
+    if (searchParams.get("searchMode") !== "smart") return;
+    setLibrarySearchMode("classic");
+    const p = new URLSearchParams(searchParams.toString());
+    p.delete("searchMode");
+    const q = p.toString();
+    router.replace(q ? `/library?${q}` : "/library", { scroll: false });
+  }, [featureFlags, pathname, searchParams, router]);
 
   // ——— React Query: данные с сервера ———
   const openedPlaylist = libraryOpenedPlaylistId
@@ -2073,7 +2236,8 @@ function MediaManagerContent() {
   const { data: videosData, isLoading: videosLoading } = useQuery({
     queryKey: [
       "videos",
-      searchQuery,
+      videosSearchQuery,
+      effectiveLibrarySearchMode,
       librarySelectedChannelId,
       libraryOpenedCategoryKey,
       libraryOpenedPlaylistId,
@@ -2084,7 +2248,8 @@ function MediaManagerContent() {
       libraryVideosPage,
       openedPlaylist?.videoIds?.length ?? 0,
     ],
-    queryFn: () => {
+    queryFn: async () => {
+      try {
       if (libraryOpenedPlaylistId && openedPlaylist?.videoIds?.length) {
         const total = openedPlaylist.videoIds.length;
         const limit = Math.min(total, 500);
@@ -2110,34 +2275,101 @@ function MediaManagerContent() {
                 : "downloadedAt",
         });
       }
-      return api.videos.list({
+
+      const sortPublished =
+        librarySelectedChannelId ||
+        libraryOpenedCategoryKey ||
+        libraryOpenedFavorites ||
+        videosSearchQuery ||
+        librarySelectedTagId
+          ? "publishedAt"
+          : "downloadedAt";
+
+      const baseList = {
         page: libraryVideosPage,
         limit: 24,
-        search: searchQuery,
+        search: videosSearchQuery,
         channelId: libraryOpenedFavorites
           ? "__favorites__"
           : librarySelectedChannelId || undefined,
         categoryId: libraryOpenedCategoryKey || undefined,
         tagId: librarySelectedTagId || undefined,
-        sort:
-          librarySelectedChannelId ||
-          libraryOpenedCategoryKey ||
-          libraryOpenedFavorites ||
-          searchQuery ||
-          librarySelectedTagId
-            ? "publishedAt"
-            : "downloadedAt",
-      });
+        sort: sortPublished,
+      };
+
+      if (effectiveLibrarySearchMode === "smart" && videosSearchQuery.trim()) {
+        if (
+          libraryVideosPage > 1 &&
+          smartSearchOrderedIds &&
+          smartSearchOrderedIds.length > 0
+        ) {
+          return api.videos.list({
+            page: libraryVideosPage,
+            limit: 24,
+            ids: smartSearchOrderedIds,
+          });
+        }
+        if (libraryVideosPage === 1) {
+          return api.videos.list({
+            ...baseList,
+            page: 1,
+            searchMode: "smart",
+          });
+        }
+      }
+
+      return api.videos.list(baseList);
+      } catch (e: unknown) {
+        const err = e as {
+          status?: number;
+          data?: { error?: string };
+        };
+        if (
+          err.status === 503 &&
+          err.data?.error === "smart_search_unavailable"
+        ) {
+          toast.error(
+            "Умный поиск недоступен: задайте AI_API_KEY в окружении сервера.",
+          );
+        }
+        throw e;
+      }
     },
     enabled:
-      !!librarySelectedChannelId ||
-      !!searchQuery ||
-      !!libraryOpenedCategoryKey ||
-      libraryOpenedFavorites ||
-      !!librarySelectedTagId ||
-      !!libraryOpenedRecentSection ||
-      (!!libraryOpenedPlaylistId && !!openedPlaylist),
+      (!!librarySelectedChannelId ||
+        !!videosSearchQuery.trim() ||
+        !!libraryOpenedCategoryKey ||
+        libraryOpenedFavorites ||
+        !!librarySelectedTagId ||
+        !!libraryOpenedRecentSection ||
+        (!!libraryOpenedPlaylistId && !!openedPlaylist)) &&
+      !(
+        effectiveLibrarySearchMode === "smart" &&
+        videosSearchQuery.trim() &&
+        libraryVideosPage > 1 &&
+        (!smartSearchOrderedIds || smartSearchOrderedIds.length === 0)
+      ),
   });
+
+  useEffect(() => {
+    if (!videosData || typeof videosData !== "object") return;
+    const d = videosData as {
+      smartOrderedVideoIds?: string[];
+    };
+    if (libraryVideosPage !== 1) return;
+    if (effectiveLibrarySearchMode !== "smart" || !videosSearchQuery.trim())
+      return;
+    if (Array.isArray(d.smartOrderedVideoIds)) {
+      setSmartSearchOrderedIds(d.smartOrderedVideoIds);
+    } else {
+      setSmartSearchOrderedIds(null);
+    }
+  }, [
+    videosData,
+    libraryVideosPage,
+    effectiveLibrarySearchMode,
+    videosSearchQuery,
+  ]);
 
   const { data: sectionsData, isLoading: sectionsLoading } =
     useQuery<LibrarySectionsResponse>({
@@ -2151,7 +2383,7 @@ function MediaManagerContent() {
         !libraryOpenedFavorites &&
         !libraryOpenedBookmarks &&
         !librarySelectedTagId &&
-        !searchQuery,
+        !videosSearchQuery.trim(),
     });
 
   const { data: tagsData } = useQuery({
@@ -3205,6 +3437,7 @@ function MediaManagerContent() {
                   libraryOpenedCategoryKey ||
                   libraryOpenedPlaylistId ||
                   libraryOpenedFavorites ||
+                  libraryOpenedBookmarks ||
                   librarySelectedTagId ||
                   libraryOpenedRecentSection) && (
                   <Button
@@ -3220,49 +3453,213 @@ function MediaManagerContent() {
                       setLibraryOpenedCategoryKey(null);
                       setLibraryOpenedPlaylistId(null);
                       setLibraryOpenedFavorites(false);
+                      setLibraryOpenedBookmarks(false);
                       setLibrarySelectedTagId(null);
                       setLibraryOpenedRecentSection(null);
                       setSearchQuery("");
+                      setLibraryAiDraft("");
+                      setLibraryAiCommittedQuery("");
                       setLibraryOpenedFromTab(null);
                     }}
                   >
                     <ChevronUp className="h-4 w-4 -rotate-90" />
                   </Button>
                 )}
-                <div className="relative flex-1 min-w-0 w-full sm:max-w-md">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-                  <Input
-                    placeholder="Поиск видео..."
-                    value={searchQuery}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setSearchQuery(v);
-                      if (pathname === "/library") {
-                        const params = new URLSearchParams(
-                          searchParams.toString(),
-                        );
-                        if (v) params.set("q", v);
-                        else params.delete("q");
-                        const query = params.toString();
-                        router.replace(
-                          query ? `/library?${query}` : "/library",
-                          { scroll: false },
-                        );
-                      }
-                    }}
-                    className="pl-9 pr-9 w-full"
-                  />
-                  {searchQuery && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 text-muted-foreground hover:text-foreground"
-                      onClick={() => router.push("/library")}
-                      title="Очистить"
-                    >
-                      <X className="h-4 w-4" />
-                    </Button>
+                <div className="flex flex-1 min-w-0 w-full sm:max-w-md gap-1.5 items-center">
+                  {!librarySmartSearchSupported ? (
+                    <div className="relative flex-1 min-w-0">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+                      <Input
+                        placeholder="Поиск видео..."
+                        value={searchQuery}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setSearchQuery(v);
+                          if (pathname === "/library") {
+                            const params = new URLSearchParams(
+                              searchParams.toString(),
+                            );
+                            if (v) params.set("q", v);
+                            else params.delete("q");
+                            const query = params.toString();
+                            router.replace(
+                              query ? `/library?${query}` : "/library",
+                              { scroll: false },
+                            );
+                          }
+                        }}
+                        className="pl-9 pr-9 w-full"
+                      />
+                      {searchQuery && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 text-muted-foreground hover:text-foreground"
+                          onClick={() => router.push("/library")}
+                          title="Очистить"
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
+                  ) : (
+                    <>
+                      <div
+                        className={cn(
+                          "flex flex-1 min-w-0 rounded-md border border-input bg-background shadow-xs overflow-hidden transition-[box-shadow]",
+                          "focus-within:border-ring/60 focus-within:ring-[3px] focus-within:ring-ring/20",
+                        )}
+                      >
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className={cn(
+                                "h-9 shrink-0 rounded-none border-0 border-r border-input px-2 gap-0.5",
+                                "text-muted-foreground hover:text-foreground hover:bg-muted/60",
+                              )}
+                              aria-label={
+                                librarySearchMode === "smart"
+                                  ? "Режим поиска: умный (AI). Открыть выбор"
+                                  : "Режим поиска: по тексту. Открыть выбор"
+                              }
+                              title={
+                                librarySearchMode === "smart"
+                                  ? "Умный поиск (AI)"
+                                  : "Обычный поиск по тексту"
+                              }
+                            >
+                              {librarySearchMode === "smart" ? (
+                                <Sparkles className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                              ) : (
+                                <TextSearch className="h-4 w-4" />
+                              )}
+                              <ChevronDown className="h-3 w-3 opacity-50" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="start" className="w-56">
+                            <DropdownMenuItem
+                              className="cursor-pointer"
+                              onSelect={() => applyLibrarySearchMode("classic")}
+                            >
+                              <TextSearch className="mr-2 h-4 w-4" />
+                              По тексту
+                              {librarySearchMode === "classic" && (
+                                <Check className="ml-auto h-4 w-4 opacity-80" />
+                              )}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              className="cursor-pointer"
+                              disabled={
+                                featureFlags
+                                  ? !featureFlags.smartSearchAvailable
+                                  : false
+                              }
+                              title={
+                                featureFlags &&
+                                !featureFlags.smartSearchAvailable
+                                  ? "Задайте AI_API_KEY на сервере"
+                                  : "Ключевые слова и реранк; Enter или кнопка справа"
+                              }
+                              onSelect={() => applyLibrarySearchMode("smart")}
+                            >
+                              <Sparkles className="mr-2 h-4 w-4 text-amber-600 dark:text-amber-400" />
+                              Умный (AI)
+                              {librarySearchMode === "smart" && (
+                                <Check className="ml-auto h-4 w-4 opacity-80" />
+                              )}
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                        <div className="relative flex-1 min-w-0">
+                          <Input
+                            placeholder={
+                              libraryAiSearchDeferredUi
+                                ? "Запрос… Enter или →"
+                                : "Поиск видео..."
+                            }
+                            value={
+                              libraryAiSearchDeferredUi
+                                ? libraryAiDraft
+                                : searchQuery
+                            }
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              if (libraryAiSearchDeferredUi) {
+                                setLibraryAiDraft(v);
+                                return;
+                              }
+                              setSearchQuery(v);
+                              if (pathname === "/library") {
+                                const params = new URLSearchParams(
+                                  searchParams.toString(),
+                                );
+                                if (v) params.set("q", v);
+                                else params.delete("q");
+                                const query = params.toString();
+                                router.replace(
+                                  query ? `/library?${query}` : "/library",
+                                  { scroll: false },
+                                );
+                              }
+                            }}
+                            onKeyDown={(e) => {
+                              if (
+                                libraryAiSearchDeferredUi &&
+                                e.key === "Enter"
+                              ) {
+                                e.preventDefault();
+                                commitLibraryAiSearch();
+                              }
+                            }}
+                            className="h-9 min-w-0 border-0 bg-transparent pl-3 pr-9 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 rounded-none"
+                          />
+                          {(libraryAiSearchDeferredUi
+                            ? libraryAiDraft
+                            : searchQuery) && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="absolute right-0.5 top-1/2 -translate-y-1/2 h-7 w-7 text-muted-foreground hover:text-foreground"
+                              onClick={() => {
+                                if (libraryAiSearchDeferredUi) {
+                                  setLibraryAiDraft("");
+                                  setLibraryAiCommittedQuery("");
+                                  setSmartSearchOrderedIds(null);
+                                  router.push("/library?searchMode=smart");
+                                } else {
+                                  router.push("/library");
+                                }
+                              }}
+                              title="Очистить"
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                      {libraryAiSearchDeferredUi && (
+                        <Button
+                          type="button"
+                          size="icon"
+                          className={cn(
+                            "h-9 w-9 shrink-0 rounded-md",
+                            "bg-gradient-to-b from-primary to-primary/88 text-primary-foreground shadow-sm",
+                            "border border-primary/25 hover:from-primary/95 hover:to-primary/80",
+                            "active:scale-[0.97] transition-transform",
+                          )}
+                          onClick={() => commitLibraryAiSearch()}
+                          title="Найти (Enter)"
+                          aria-label="Найти"
+                        >
+                          <CornerDownLeft className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
@@ -3904,7 +4301,7 @@ function MediaManagerContent() {
                   <Video className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
                   <h3 className="font-medium mb-2">Нет видео</h3>
                   <p className="text-sm text-muted-foreground">
-                    {searchQuery
+                    {videosSearchQuery.trim()
                       ? "По вашему запросу ничего не найдено"
                       : libraryOpenedFavorites
                         ? "Пока нет избранного"
@@ -6602,13 +6999,21 @@ function MediaManagerContent() {
                             очереди. Это действие нельзя отменить.
                           </AlertDialogDescription>
                         </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogCancel>Отмена</AlertDialogCancel>
-                          <AlertDialogAction
-                            onClick={() => queueClearMutation.mutate()}
+                        <AlertDialogFooter className="flex-row flex-wrap items-center justify-between gap-3 sm:justify-between">
+                          <HelpDocLink
+                            section="queue"
+                            className="min-w-0 shrink text-xs font-normal text-muted-foreground"
                           >
-                            Да, очистить
-                          </AlertDialogAction>
+                            Справка: очередь загрузок
+                          </HelpDocLink>
+                          <div className="flex shrink-0 flex-wrap gap-2">
+                            <AlertDialogCancel>Отмена</AlertDialogCancel>
+                            <AlertDialogAction
+                              onClick={() => queueClearMutation.mutate()}
+                            >
+                              Да, очистить
+                            </AlertDialogAction>
+                          </div>
                         </AlertDialogFooter>
                       </AlertDialogContent>
                     </AlertDialog>
@@ -6688,13 +7093,21 @@ function MediaManagerContent() {
                             очереди. Это действие нельзя отменить.
                           </AlertDialogDescription>
                         </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogCancel>Отмена</AlertDialogCancel>
-                          <AlertDialogAction
-                            onClick={() => queueClearMutation.mutate()}
+                        <AlertDialogFooter className="flex-row flex-wrap items-center justify-between gap-3 sm:justify-between">
+                          <HelpDocLink
+                            section="queue"
+                            className="min-w-0 shrink text-xs font-normal text-muted-foreground"
                           >
-                            Да, очистить
-                          </AlertDialogAction>
+                            Справка: очередь загрузок
+                          </HelpDocLink>
+                          <div className="flex shrink-0 flex-wrap gap-2">
+                            <AlertDialogCancel>Отмена</AlertDialogCancel>
+                            <AlertDialogAction
+                              onClick={() => queueClearMutation.mutate()}
+                            >
+                              Да, очистить
+                            </AlertDialogAction>
+                          </div>
                         </AlertDialogFooter>
                       </AlertDialogContent>
                     </AlertDialog>
@@ -8649,11 +9062,19 @@ function MediaManagerContent() {
             ))}
           </Tabs>
 
-          <DialogFooter>
-            <Button variant="outline" onClick={() => depsQuery.refetch()}>
-              Проверить снова
-            </Button>
-            <Button onClick={() => setDepsDialogOpen(false)}>Закрыть</Button>
+          <DialogFooter className="flex-row flex-wrap items-center justify-between gap-3 sm:justify-between">
+            <HelpDocLink
+              section="queue"
+              className="min-w-0 shrink text-xs font-normal text-muted-foreground"
+            >
+              Справка: очередь загрузок
+            </HelpDocLink>
+            <div className="flex shrink-0 gap-2">
+              <Button variant="outline" onClick={() => depsQuery.refetch()}>
+                Проверить снова
+              </Button>
+              <Button onClick={() => setDepsDialogOpen(false)}>Закрыть</Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -8671,13 +9092,8 @@ function MediaManagerContent() {
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Скачать видео</DialogTitle>
-            <DialogDescription className="space-y-2">
-              <span className="block">
-                Вставьте ссылку на видео с YouTube или другой платформы
-              </span>
-              <HelpDocLink section="download" className="text-xs font-normal text-muted-foreground">
-                Справка: скачивание видео
-              </HelpDocLink>
+            <DialogDescription>
+              Вставьте ссылку на видео с YouTube или другой платформы
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -8735,24 +9151,32 @@ function MediaManagerContent() {
               </div>
             )}
           </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setDownloadDialogOpen(false)}
+          <DialogFooter className="flex-row flex-wrap items-center justify-between gap-3 sm:justify-between">
+            <HelpDocLink
+              section="download"
+              className="min-w-0 shrink text-xs font-normal text-muted-foreground"
             >
-              Отмена
-            </Button>
-            <Button
-              onClick={() => downloadMutation.mutate()}
-              disabled={!videoInfo || downloadMutation.isPending}
-            >
-              {downloadMutation.isPending ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <DownloadIcon className="mr-2 h-4 w-4" />
-              )}
-              Скачать
-            </Button>
+              Справка: скачивание видео
+            </HelpDocLink>
+            <div className="flex shrink-0 gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setDownloadDialogOpen(false)}
+              >
+                Отмена
+              </Button>
+              <Button
+                onClick={() => downloadMutation.mutate()}
+                disabled={!videoInfo || downloadMutation.isPending}
+              >
+                {downloadMutation.isPending ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <DownloadIcon className="mr-2 h-4 w-4" />
+                )}
+                Скачать
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -8793,30 +9217,22 @@ function MediaManagerContent() {
       >
         <DialogContent
           showCloseButton={false}
-          className="max-w-md gap-0 rounded-2xl border-slate-200/80 bg-white p-0 shadow-dialog dark:bg-slate-900 dark:border-slate-700/80"
+          className="flex max-h-[calc(100dvh-1rem-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px))] max-w-md flex-col gap-0 overflow-hidden rounded-2xl border-slate-200/80 bg-white p-0 shadow-dialog dark:bg-slate-900 dark:border-slate-700/80"
         >
-          <div className="flex items-start justify-between border-b border-slate-100 px-6 pt-5 pb-4 dark:border-slate-800">
+          <div className="flex shrink-0 items-start justify-between border-b border-slate-100 px-6 pt-5 pb-4 dark:border-slate-800">
             <div>
               <DialogTitle className="text-base font-semibold text-slate-800 dark:text-slate-200">
                 Добавить подписку
               </DialogTitle>
-              <DialogDescription className="mt-0.5 space-y-2 text-xs text-slate-400 dark:text-slate-500">
-                <span className="block">
-                  Введите ссылку на канал для автоматического скачивания новых видео
-                </span>
-                <HelpDocLink
-                  section="subscriptions"
-                  className="text-xs font-normal text-slate-500 hover:text-primary dark:text-slate-400"
-                >
-                  Справка: подписки на каналы
-                </HelpDocLink>
+              <DialogDescription className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
+                Введите ссылку на канал для автоматического скачивания новых видео
               </DialogDescription>
             </div>
             <DialogClose className="absolute top-4 right-4 mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300">
               <X className="h-4 w-4" />
             </DialogClose>
           </div>
-          <div className="space-y-5 px-6 py-5">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-y-contain px-6 py-4 sm:space-y-5 sm:py-5">
             <div>
               <Label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-400">
                 Ссылка на канал
@@ -8987,38 +9403,46 @@ function MediaManagerContent() {
               />
             </div>
           </div>
-          <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/60 px-6 py-4 dark:border-slate-800 dark:bg-slate-800/30">
-            <Button
-              variant="ghost"
-              onClick={() => setSubscriptionDialogOpen(false)}
-              className="rounded-xl px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 dark:text-slate-400 dark:hover:bg-slate-700"
+          <div className="flex shrink-0 items-center justify-between gap-3 border-t border-slate-100 bg-slate-50/60 px-6 pt-4 pb-[max(1rem,env(safe-area-inset-bottom,0px))] dark:border-slate-800 dark:bg-slate-800/30">
+            <HelpDocLink
+              section="subscriptions"
+              className="min-w-0 shrink text-xs font-normal text-slate-500 hover:text-primary dark:text-slate-400"
             >
-              Отмена
-            </Button>
-            <Button
-              onClick={() => {
-                const effectiveAutoDeleteDays =
-                  subscriptionAutoDeleteDays === 0
-                    ? Number.POSITIVE_INFINITY
-                    : subscriptionAutoDeleteDays;
+              Справка: подписки на каналы
+            </HelpDocLink>
+            <div className="flex shrink-0 items-center gap-2">
+              <Button
+                variant="ghost"
+                onClick={() => setSubscriptionDialogOpen(false)}
+                className="rounded-xl px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 dark:text-slate-400 dark:hover:bg-slate-700"
+              >
+                Отмена
+              </Button>
+              <Button
+                onClick={() => {
+                  const effectiveAutoDeleteDays =
+                    subscriptionAutoDeleteDays === 0
+                      ? Number.POSITIVE_INFINITY
+                      : subscriptionAutoDeleteDays;
 
-                if (subscriptionDays > effectiveAutoDeleteDays) {
-                  toast.error(
-                    "Период «Скачивать видео за последние» не может быть больше периода «Удалять видео через».",
-                  );
-                  return;
-                }
+                  if (subscriptionDays > effectiveAutoDeleteDays) {
+                    toast.error(
+                      "Период «Скачивать видео за последние» не может быть больше периода «Удалять видео через».",
+                    );
+                    return;
+                  }
 
-                subscriptionMutation.mutate();
-              }}
-              disabled={!subscriptionUrl || subscriptionMutation.isPending}
-              className="rounded-xl px-5 py-2 text-sm font-semibold shadow-sm"
-            >
-              {subscriptionMutation.isPending && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              )}
-              Подписаться
-            </Button>
+                  subscriptionMutation.mutate();
+                }}
+                disabled={!subscriptionUrl || subscriptionMutation.isPending}
+                className="rounded-xl px-5 py-2 text-sm font-semibold shadow-sm"
+              >
+                {subscriptionMutation.isPending && (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                )}
+                Подписаться
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
@@ -9030,9 +9454,9 @@ function MediaManagerContent() {
       >
         <DialogContent
           showCloseButton={false}
-          className="max-w-md gap-0 rounded-2xl border-slate-200/80 bg-white p-0 shadow-dialog dark:bg-slate-900 dark:border-slate-700/80"
+          className="flex max-h-[calc(100dvh-1rem-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px))] max-w-md flex-col gap-0 overflow-hidden rounded-2xl border-slate-200/80 bg-white p-0 shadow-dialog dark:bg-slate-900 dark:border-slate-700/80"
         >
-          <div className="flex items-start justify-between border-b border-slate-100 px-6 pt-5 pb-4 dark:border-slate-800">
+          <div className="flex shrink-0 items-start justify-between border-b border-slate-100 px-6 pt-5 pb-4 dark:border-slate-800">
             <div>
               <DialogTitle className="text-base font-semibold text-slate-800 dark:text-slate-200">
                 Редактировать подписку
@@ -9048,7 +9472,7 @@ function MediaManagerContent() {
               <X className="h-4 w-4" />
             </DialogClose>
           </div>
-          <div className="space-y-5 px-6 py-5">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-y-contain px-6 py-4 sm:space-y-5 sm:py-5">
             {(() => {
               const editSub = editSubscriptionId
                 ? subscriptions?.find(
@@ -9247,38 +9671,46 @@ function MediaManagerContent() {
               />
             </div>
           </div>
-          <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/60 px-6 py-4 dark:border-slate-800 dark:bg-slate-800/30">
-            <Button
-              variant="ghost"
-              onClick={() => setEditSubscriptionId(null)}
-              className="rounded-xl px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 dark:text-slate-400 dark:hover:bg-slate-700"
+          <div className="flex shrink-0 items-center justify-between gap-3 border-t border-slate-100 bg-slate-50/60 px-6 pt-4 pb-[max(1rem,env(safe-area-inset-bottom,0px))] dark:border-slate-800 dark:bg-slate-800/30">
+            <HelpDocLink
+              section="subscriptions"
+              className="min-w-0 shrink text-xs font-normal text-slate-500 hover:text-primary dark:text-slate-400"
             >
-              Отмена
-            </Button>
-            <Button
-              onClick={() => {
-                const effectiveAutoDeleteDays =
-                  editSubscriptionAutoDeleteDays === 0
-                    ? Number.POSITIVE_INFINITY
-                    : editSubscriptionAutoDeleteDays;
+              Справка: подписки на каналы
+            </HelpDocLink>
+            <div className="flex shrink-0 items-center gap-2">
+              <Button
+                variant="ghost"
+                onClick={() => setEditSubscriptionId(null)}
+                className="rounded-xl px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 dark:text-slate-400 dark:hover:bg-slate-700"
+              >
+                Отмена
+              </Button>
+              <Button
+                onClick={() => {
+                  const effectiveAutoDeleteDays =
+                    editSubscriptionAutoDeleteDays === 0
+                      ? Number.POSITIVE_INFINITY
+                      : editSubscriptionAutoDeleteDays;
 
-                if (editSubscriptionDays > effectiveAutoDeleteDays) {
-                  toast.error(
-                    "Период «Дней истории» не может быть больше периода «Удалять видео через».",
-                  );
-                  return;
-                }
+                  if (editSubscriptionDays > effectiveAutoDeleteDays) {
+                    toast.error(
+                      "Период «Дней истории» не может быть больше периода «Удалять видео через».",
+                    );
+                    return;
+                  }
 
-                updateSubscriptionMutation.mutate();
-              }}
-              disabled={updateSubscriptionMutation.isPending}
-              className="rounded-xl px-5 py-2 text-sm font-semibold shadow-sm"
-            >
-              {updateSubscriptionMutation.isPending && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              )}
-              Сохранить
-            </Button>
+                  updateSubscriptionMutation.mutate();
+                }}
+                disabled={updateSubscriptionMutation.isPending}
+                className="rounded-xl px-5 py-2 text-sm font-semibold shadow-sm"
+              >
+                {updateSubscriptionMutation.isPending && (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                )}
+                Сохранить
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
@@ -9301,28 +9733,36 @@ function MediaManagerContent() {
                 : "Видео будет удалено с диска и из библиотеки. Это действие нельзя отменить."}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Отмена</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                if (
-                  librarySelectedChannelId === LIBRARY_INDIVIDUAL_CHANNEL_ID
-                ) {
-                  deleteIndividualVideoMutation.mutate();
-                } else {
-                  deleteVideoMutation.mutate();
-                }
-              }}
-              disabled={
-                deleteVideoMutation.isPending ||
-                deleteIndividualVideoMutation.isPending
-              }
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+          <AlertDialogFooter className="flex-row flex-wrap items-center justify-between gap-3 sm:justify-between">
+            <HelpDocLink
+              section="library"
+              className="min-w-0 shrink text-xs font-normal text-muted-foreground"
             >
-              {librarySelectedChannelId === LIBRARY_INDIVIDUAL_CHANNEL_ID
-                ? "Убрать"
-                : "Удалить"}
-            </AlertDialogAction>
+              Справка: медиатека
+            </HelpDocLink>
+            <div className="flex shrink-0 flex-wrap gap-2">
+              <AlertDialogCancel>Отмена</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => {
+                  if (
+                    librarySelectedChannelId === LIBRARY_INDIVIDUAL_CHANNEL_ID
+                  ) {
+                    deleteIndividualVideoMutation.mutate();
+                  } else {
+                    deleteVideoMutation.mutate();
+                  }
+                }}
+                disabled={
+                  deleteVideoMutation.isPending ||
+                  deleteIndividualVideoMutation.isPending
+                }
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                {librarySelectedChannelId === LIBRARY_INDIVIDUAL_CHANNEL_ID
+                  ? "Убрать"
+                  : "Удалить"}
+              </AlertDialogAction>
+            </div>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -9339,19 +9779,27 @@ function MediaManagerContent() {
               Плейлист будет удалён. Сами видео в библиотеке останутся.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Отмена</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                if (deletePlaylistId) {
-                  deletePlaylistMutation.mutate(deletePlaylistId);
-                }
-              }}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              disabled={deletePlaylistMutation.isPending}
+          <AlertDialogFooter className="flex-row flex-wrap items-center justify-between gap-3 sm:justify-between">
+            <HelpDocLink
+              section="library"
+              className="min-w-0 shrink text-xs font-normal text-muted-foreground"
             >
-              Удалить
-            </AlertDialogAction>
+              Справка: медиатека и плейлисты
+            </HelpDocLink>
+            <div className="flex shrink-0 flex-wrap gap-2">
+              <AlertDialogCancel>Отмена</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => {
+                  if (deletePlaylistId) {
+                    deletePlaylistMutation.mutate(deletePlaylistId);
+                  }
+                }}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                disabled={deletePlaylistMutation.isPending}
+              >
+                Удалить
+              </AlertDialogAction>
+            </div>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -9369,19 +9817,27 @@ function MediaManagerContent() {
               нельзя отменить.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Отмена</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                if (deleteTagId) {
-                  deleteTagMutation.mutate(deleteTagId);
-                }
-              }}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              disabled={deleteTagMutation.isPending}
+          <AlertDialogFooter className="flex-row flex-wrap items-center justify-between gap-3 sm:justify-between">
+            <HelpDocLink
+              section="library"
+              className="min-w-0 shrink text-xs font-normal text-muted-foreground"
             >
-              Удалить
-            </AlertDialogAction>
+              Справка: медиатека и теги
+            </HelpDocLink>
+            <div className="flex shrink-0 flex-wrap gap-2">
+              <AlertDialogCancel>Отмена</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => {
+                  if (deleteTagId) {
+                    deleteTagMutation.mutate(deleteTagId);
+                  }
+                }}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                disabled={deleteTagMutation.isPending}
+              >
+                Удалить
+              </AlertDialogAction>
+            </div>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -9448,12 +9904,19 @@ function MediaManagerContent() {
                     </Button>
                   </div>
                   <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-9 w-9 shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                      title="Отменить доступ"
-                      onClick={async () => {
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <HelpDocLink
+                        section="sharing"
+                        className="min-w-0 shrink text-xs font-normal text-muted-foreground"
+                      >
+                        Справка: поделиться видео
+                      </HelpDocLink>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-9 w-9 shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        title="Отменить доступ"
+                        onClick={async () => {
                         if (!shareDialogPlaylistId) return;
                         try {
                           await api.playlists.share(
@@ -9473,6 +9936,7 @@ function MediaManagerContent() {
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>
+                    </div>
                     <div className="flex gap-2 shrink-0">
                       <Button
                         variant="secondary"
@@ -9499,16 +9963,31 @@ function MediaManagerContent() {
                   </div>
                 </>
               ) : (
-                <p className="text-sm text-muted-foreground">
-                  Ссылка недоступна.
-                </p>
+                <div className="space-y-2">
+                  <p className="text-sm text-muted-foreground">
+                    Ссылка недоступна.
+                  </p>
+                  <HelpDocLink
+                    section="sharing"
+                    className="min-w-0 shrink text-xs font-normal text-muted-foreground"
+                  >
+                    Справка: поделиться видео
+                  </HelpDocLink>
+                </div>
               )
             ) : (
               <div className="space-y-4">
                 <p className="text-sm text-muted-foreground">
                   Сейчас доступ по ссылке для этого плейлиста отключён.
                 </p>
-                <div className="flex justify-end gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <HelpDocLink
+                    section="sharing"
+                    className="min-w-0 shrink text-xs font-normal text-muted-foreground"
+                  >
+                    Справка: поделиться видео
+                  </HelpDocLink>
+                  <div className="flex shrink-0 gap-2">
                   <Button
                     size="sm"
                     onClick={async () => {
@@ -9547,6 +10026,7 @@ function MediaManagerContent() {
                   >
                     Закрыть
                   </Button>
+                  </div>
                 </div>
               </div>
             )}
@@ -9583,31 +10063,39 @@ function MediaManagerContent() {
               />
             </div>
           </div>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                setEditTagId(null);
-                setEditTagName("");
-              }}
+          <DialogFooter className="flex-row flex-wrap items-center justify-between gap-3 sm:justify-between">
+            <HelpDocLink
+              section="library"
+              className="min-w-0 shrink text-xs font-normal text-muted-foreground"
             >
-              Отмена
-            </Button>
-            <Button
-              type="button"
-              onClick={() => updateTagMutation.mutate()}
-              disabled={updateTagMutation.isPending || !editTagName.trim()}
-            >
-              {updateTagMutation.isPending ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Сохранение...
-                </>
-              ) : (
-                "Сохранить"
-              )}
-            </Button>
+              Справка: медиатека и теги
+            </HelpDocLink>
+            <div className="flex shrink-0 gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setEditTagId(null);
+                  setEditTagName("");
+                }}
+              >
+                Отмена
+              </Button>
+              <Button
+                type="button"
+                onClick={() => updateTagMutation.mutate()}
+                disabled={updateTagMutation.isPending || !editTagName.trim()}
+              >
+                {updateTagMutation.isPending ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Сохранение...
+                  </>
+                ) : (
+                  "Сохранить"
+                )}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -9642,33 +10130,41 @@ function MediaManagerContent() {
               />
             </div>
           </div>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                setEditPlaylistId(null);
-                setEditPlaylistName("");
-              }}
+          <DialogFooter className="flex-row flex-wrap items-center justify-between gap-3 sm:justify-between">
+            <HelpDocLink
+              section="library"
+              className="min-w-0 shrink text-xs font-normal text-muted-foreground"
             >
-              Отмена
-            </Button>
-            <Button
-              type="button"
-              onClick={() => updatePlaylistMutation.mutate()}
-              disabled={
-                updatePlaylistMutation.isPending || !editPlaylistName.trim()
-              }
-            >
-              {updatePlaylistMutation.isPending ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Сохранение...
-                </>
-              ) : (
-                "Сохранить"
-              )}
-            </Button>
+              Справка: медиатека и плейлисты
+            </HelpDocLink>
+            <div className="flex shrink-0 gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setEditPlaylistId(null);
+                  setEditPlaylistName("");
+                }}
+              >
+                Отмена
+              </Button>
+              <Button
+                type="button"
+                onClick={() => updatePlaylistMutation.mutate()}
+                disabled={
+                  updatePlaylistMutation.isPending || !editPlaylistName.trim()
+                }
+              >
+                {updatePlaylistMutation.isPending ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Сохранение...
+                  </>
+                ) : (
+                  "Сохранить"
+                )}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -9685,14 +10181,22 @@ function MediaManagerContent() {
               Подписка будет удалена. Скачанные видео останутся в библиотеке.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Отмена</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => deleteSubscriptionMutation.mutate()}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+          <AlertDialogFooter className="flex-row flex-wrap items-center justify-between gap-3 sm:justify-between">
+            <HelpDocLink
+              section="subscriptions"
+              className="min-w-0 shrink text-xs font-normal text-muted-foreground"
             >
-              Удалить
-            </AlertDialogAction>
+              Справка: подписки
+            </HelpDocLink>
+            <div className="flex shrink-0 flex-wrap gap-2">
+              <AlertDialogCancel>Отмена</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => deleteSubscriptionMutation.mutate()}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                Удалить
+              </AlertDialogAction>
+            </div>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -9727,20 +10231,28 @@ function MediaManagerContent() {
               />
             </div>
           </div>
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button variant="outline">Отмена</Button>
-            </DialogClose>
-            <Button
-              variant="destructive"
-              onClick={() => cleanOldVideosMutation.mutate()}
-              disabled={cleanOldVideosMutation.isPending}
+          <DialogFooter className="flex-row flex-wrap items-center justify-between gap-3 sm:justify-between">
+            <HelpDocLink
+              section="subscriptions"
+              className="min-w-0 shrink text-xs font-normal text-muted-foreground"
             >
-              {cleanOldVideosMutation.isPending ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : null}
-              Удалить
-            </Button>
+              Справка: подписки и очистка
+            </HelpDocLink>
+            <div className="flex shrink-0 gap-2">
+              <DialogClose asChild>
+                <Button variant="outline">Отмена</Button>
+              </DialogClose>
+              <Button
+                variant="destructive"
+                onClick={() => cleanOldVideosMutation.mutate()}
+                disabled={cleanOldVideosMutation.isPending}
+              >
+                {cleanOldVideosMutation.isPending ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : null}
+                Удалить
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -9762,18 +10274,26 @@ function MediaManagerContent() {
               нельзя отменить.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Отмена</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => clearVideosMutation.mutate()}
-              disabled={clearVideosMutation.isPending}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+          <AlertDialogFooter className="flex-row flex-wrap items-center justify-between gap-3 sm:justify-between">
+            <HelpDocLink
+              section="library"
+              className="min-w-0 shrink text-xs font-normal text-muted-foreground"
             >
-              {clearVideosMutation.isPending ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : null}
-              Очистить
-            </AlertDialogAction>
+              Справка: медиатека
+            </HelpDocLink>
+            <div className="flex shrink-0 flex-wrap gap-2">
+              <AlertDialogCancel>Отмена</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => clearVideosMutation.mutate()}
+                disabled={clearVideosMutation.isPending}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                {clearVideosMutation.isPending ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : null}
+                Очистить
+              </AlertDialogAction>
+            </div>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
